@@ -237,7 +237,7 @@
       <label>メモ・感想</label>
       <textarea id="f-memo" placeholder="心に残ったこと、引用など"></textarea>
     </div>
-    <button class="btn" id="save-btn">棚に並べる</button>
+    <button class="btn" id="save-btn">登録</button>
     <button class="btn ghost" id="cancel-edit-btn" style="display:none;margin-left:8px;">編集をやめる</button>
   </div>
 
@@ -273,16 +273,18 @@
 
   async function loadBooks(){
     const res = await fetch("/api/books");
+    if(!res.ok) throw new Error("本の一覧を取得できませんでした(status " + res.status + ")");
     booksCache = await res.json();
     return booksCache;
   }
   async function saveBooks(books){
-    booksCache = books;
-    await fetch("/api/books", {
+    const res = await fetch("/api/books", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(books),
     });
+    if(!res.ok) throw new Error("保存に失敗しました(status " + res.status + ")");
+    booksCache = books;
   }
 
   // ---- 星の入力 ----
@@ -308,7 +310,7 @@
     currentRating = 0;
     renderStars();
     editingId = null;
-    document.getElementById("save-btn").textContent = "棚に並べる";
+    document.getElementById("save-btn").textContent = "登録";
     document.getElementById("cancel-edit-btn").style.display = "none";
   }
 
@@ -322,19 +324,24 @@
     const date = document.getElementById("f-date").value || new Date().toISOString().slice(0,10);
     const memo = document.getElementById("f-memo").value.trim();
 
-    let books = await loadBooks();
-    if(editingId){
-      books = books.map(b => b.id === editingId
-        ? { ...b, title, author, date, memo, rating: currentRating }
-        : b);
-    } else {
-      books.push({
-        id: Date.now(),
-        title, author, date, memo,
-        rating: currentRating,
-      });
+    try{
+      let books = await loadBooks();
+      if(editingId){
+        books = books.map(b => b.id === editingId
+          ? { ...b, title, author, date, memo, rating: currentRating }
+          : b);
+      } else {
+        books.push({
+          id: Date.now(),
+          title, author, date, memo,
+          rating: currentRating,
+        });
+      }
+      await saveBooks(books);
+    }catch(e){
+      alert("保存に失敗しました。サーバー(node server.js)が起動しているか確認してください。\n\n" + e.message);
+      return;
     }
-    await saveBooks(books);
     resetForm();
     render();
   });
