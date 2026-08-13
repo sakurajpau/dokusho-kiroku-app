@@ -74,11 +74,11 @@
   .panel h2::before{content:"";width:5px;height:5px;background:var(--accent-soft);border-radius:50%;display:inline-block}
   .field{margin-bottom:15px}
   .field label{display:block;font-size:.76rem;color:var(--sub);margin-bottom:6px;letter-spacing:.08em}
-  .field input[type=text],.field input[type=date],.field textarea{
+  .field input[type=text],.field input[type=date],.field textarea,.field select{
     width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:5px;
     background:#fff;color:var(--ink);font-family:inherit;font-size:.92rem;
   }
-  .field input:focus,.field textarea:focus{outline:none;border-color:var(--accent-soft)}
+  .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent-soft)}
   .field textarea{resize:vertical;min-height:64px}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .star-picker{display:flex;gap:6px;font-size:1.5rem;user-select:none}
@@ -228,6 +228,14 @@
       </div>
     </div>
     <div class="field">
+      <label>棚（カテゴリ）</label>
+      <select id="f-category">
+        <option value="自己啓発">自己啓発</option>
+        <option value="小説">小説</option>
+        <option value="トラベル">トラベル</option>
+      </select>
+    </div>
+    <div class="field">
       <label>評価</label>
       <div class="star-picker" id="f-stars">
         <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
@@ -251,11 +259,8 @@
     </select>
   </div>
   <div class="shelf-label" id="count">本棚</div>
-  <div class="bookshelf-outer">
-    <div class="bookshelf-row" id="shelf-row"></div>
-    <div class="plank"></div>
-  </div>
   <div class="shelf-hint" id="shelf-hint"></div>
+  <div id="shelves"></div>
   <div class="detail-wrap" id="detail-wrap"></div>
 </div>
 
@@ -263,6 +268,9 @@
   let editingId = null;
   let selectedId = null;
   let booksCache = [];
+
+  const CATEGORIES = ["自己啓発", "小説", "トラベル"];
+  const DEFAULT_CATEGORY = CATEGORIES[0];
 
   const SPINE_COLORS = ["#a9432f","#c98c4a","#7c8a5e","#5b6b73","#8a5a44","#b5763f","#6b4d3a","#9c6b4f","#4f6d5a","#8a6a8f"];
   function spineColor(title){
@@ -307,6 +315,7 @@
     document.getElementById("f-author").value = "";
     document.getElementById("f-date").value = "";
     document.getElementById("f-memo").value = "";
+    document.getElementById("f-category").value = DEFAULT_CATEGORY;
     currentRating = 0;
     renderStars();
     editingId = null;
@@ -323,24 +332,19 @@
     const author = document.getElementById("f-author").value.trim();
     const date = document.getElementById("f-date").value || new Date().toISOString().slice(0,10);
     const memo = document.getElementById("f-memo").value.trim();
+    const category = document.getElementById("f-category").value || DEFAULT_CATEGORY;
 
-    try{
-      let books = await loadBooks();
-      if(editingId){
-        books = books.map(b => b.id === editingId
-          ? { ...b, title, author, date, memo, rating: currentRating }
-          : b);
-      } else {
-        books.push({
-          id: Date.now(),
-          title, author, date, memo,
-          rating: currentRating,
-        });
-      }
-      await saveBooks(books);
-    }catch(e){
-      alert("保存に失敗しました。サーバー(node server.js)が起動しているか確認してください。\n\n" + e.message);
-      return;
+    let books = await loadBooks();
+    if(editingId){
+      books = books.map(b => b.id === editingId
+        ? { ...b, title, author, date, memo, category, rating: currentRating }
+        : b);
+    } else {
+      books.push({
+        id: Date.now(),
+        title, author, date, memo, category,
+        rating: currentRating,
+      });
     }
     resetForm();
     render();
@@ -355,6 +359,7 @@
     document.getElementById("f-author").value = book.author;
     document.getElementById("f-date").value = book.date;
     document.getElementById("f-memo").value = book.memo;
+    document.getElementById("f-category").value = book.category || DEFAULT_CATEGORY;
     currentRating = book.rating;
     renderStars();
     editingId = id;
@@ -422,7 +427,7 @@
       return 0;
     });
 
-    const row = document.getElementById("shelf-row");
+    const shelvesEl = document.getElementById("shelves");
     const hint = document.getElementById("shelf-hint");
     const detailWrap = document.getElementById("detail-wrap");
     const count = document.getElementById("count");
@@ -433,22 +438,39 @@
 
     renderStats();
 
+    if(all.length === 0){
+      shelvesEl.innerHTML = "";
+      hint.textContent = "まだ記録がありません。最初の1冊を並べてみましょう。";
+      detailWrap.innerHTML = "";
+      return;
+    }
+
     if(books.length === 0){
-      row.innerHTML = "";
-      hint.textContent = all.length === 0 ? "まだ記録がありません。最初の1冊を並べてみましょう。" : "見つかりませんでした";
+      shelvesEl.innerHTML = "";
+      hint.textContent = "見つかりませんでした";
       detailWrap.innerHTML = "";
       return;
     }
 
     hint.textContent = "本をタップすると詳細が見られます";
 
-    row.innerHTML = books.map(b => {
-      const height = 106 + (b.rating || 0) * 9 + (b.title.length % 5) * 3;
-      const width = 30 + Math.min(12, Math.floor(b.title.length / 5));
-      const selected = b.id === selectedId ? " selected" : "";
+    shelvesEl.innerHTML = CATEGORIES.map(cat => {
+      const catBooks = books.filter(b => (b.category || DEFAULT_CATEGORY) === cat);
+      const spines = catBooks.map(b => {
+        const height = 106 + (b.rating || 0) * 9 + (b.title.length % 5) * 3;
+        const width = 30 + Math.min(12, Math.floor(b.title.length / 5));
+        const selected = b.id === selectedId ? " selected" : "";
+        return `
+          <div class="spine${selected}" style="background:${spineColor(b.title)};height:${height}px;width:${width}px" onclick="selectSpine(${b.id})" title="${escapeHtml(b.title)}">
+            <span class="spine-text">${escapeHtml(b.title)}</span>
+          </div>
+        `;
+      }).join("");
       return `
-        <div class="spine${selected}" style="background:${spineColor(b.title)};height:${height}px;width:${width}px" onclick="selectSpine(${b.id})" title="${escapeHtml(b.title)}">
-          <span class="spine-text">${escapeHtml(b.title)}</span>
+        <div class="shelf-label">${cat}（${catBooks.length}件）</div>
+        <div class="bookshelf-outer">
+          <div class="bookshelf-row">${spines}</div>
+          <div class="plank"></div>
         </div>
       `;
     }).join("");
