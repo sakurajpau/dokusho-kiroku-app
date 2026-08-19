@@ -346,6 +346,7 @@
         rating: currentRating,
       });
     }
+    await saveBooks(books);
     resetForm();
     render();
   });
