@@ -80,6 +80,15 @@
   }
   .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent-soft)}
   .field textarea{resize:vertical;min-height:64px}
+  .field .hint{font-size:.72rem;color:var(--sub);margin-top:4px;text-align:right}
+  .field.has-error input,.field.has-error textarea,.field.has-error select{border-color:#a9432f}
+  .field-error{color:#a9432f;font-size:.76rem;margin-top:5px;letter-spacing:.03em}
+  .form-error{
+    display:none;color:#a9432f;background:rgba(169,67,47,.07);
+    border:1px solid rgba(169,67,47,.25);border-radius:6px;
+    padding:10px 14px;font-size:.85rem;margin-bottom:16px;letter-spacing:.03em;
+  }
+  .form-error.show{display:block}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .star-picker{display:flex;gap:6px;font-size:1.5rem;user-select:none}
   .star-picker span{cursor:pointer;color:#e0d3b0;transition:.12s}
@@ -213,18 +222,22 @@
 
   <div class="panel">
     <h2>本を記録する</h2>
-    <div class="field">
+    <div class="form-error" id="form-error"></div>
+    <div class="field" id="field-title">
       <label>タイトル</label>
-      <input type="text" id="f-title" placeholder="例：夜と霧">
+      <input type="text" id="f-title" placeholder="例：夜と霧" maxlength="100">
+      <div class="field-error" id="err-title" style="display:none;"></div>
     </div>
     <div class="row2">
-      <div class="field">
+      <div class="field" id="field-author">
         <label>著者</label>
-        <input type="text" id="f-author" placeholder="例：ヴィクトール・フランクル">
+        <input type="text" id="f-author" placeholder="例：ヴィクトール・フランクル" maxlength="60">
+        <div class="field-error" id="err-author" style="display:none;"></div>
       </div>
-      <div class="field">
+      <div class="field" id="field-date">
         <label>読んだ日</label>
         <input type="date" id="f-date">
+        <div class="field-error" id="err-date" style="display:none;"></div>
       </div>
     </div>
     <div class="field">
@@ -241,9 +254,10 @@
         <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
       </div>
     </div>
-    <div class="field">
+    <div class="field" id="field-memo">
       <label>メモ・感想</label>
-      <textarea id="f-memo" placeholder="心に残ったこと、引用など"></textarea>
+      <textarea id="f-memo" placeholder="心に残ったこと、引用など" maxlength="500"></textarea>
+      <div class="field-error" id="err-memo" style="display:none;"></div>
     </div>
     <button class="btn" id="save-btn">棚に並べる</button>
     <button class="btn ghost" id="cancel-edit-btn" style="display:none;margin-left:8px;">編集をやめる</button>
@@ -274,23 +288,60 @@
 
   const SPINE_COLORS = ["#a9432f","#c98c4a","#7c8a5e","#5b6b73","#8a5a44","#b5763f","#6b4d3a","#9c6b4f","#4f6d5a","#8a6a8f"];
   function spineColor(title){
+    const t = title || "";
     let hash = 0;
-    for(let i=0;i<title.length;i++) hash = title.charCodeAt(i) + ((hash<<5)-hash);
+    for(let i=0;i<t.length;i++) hash = t.charCodeAt(i) + ((hash<<5)-hash);
     return SPINE_COLORS[Math.abs(hash) % SPINE_COLORS.length];
   }
 
+  // 壊れたデータ(タイトル欠け・評価が範囲外など)が books.json に混ざっていても
+  // 表示が落ちないよう、使う直前に必ず安全な形へそろえる
+  function safeBook(b){
+    const rating = Number(b.rating);
+    return {
+      ...b,
+      id: b.id ?? Date.now(),
+      title: (typeof b.title === "string" && b.title) ? b.title : "(タイトル不明)",
+      author: typeof b.author === "string" ? b.author : "",
+      date: typeof b.date === "string" ? b.date : "",
+      memo: typeof b.memo === "string" ? b.memo : "",
+      category: typeof b.category === "string" ? b.category : DEFAULT_CATEGORY,
+      rating: Number.isFinite(rating) ? Math.min(5, Math.max(0, Math.round(rating))) : 0,
+    };
+  }
+
   async function loadBooks(){
-    const res = await fetch("/api/books");
-    booksCache = await res.json();
+    try{
+      const res = await fetch("/api/books");
+      if(!res.ok) throw new Error("読み込みに失敗しました");
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : [];
+      booksCache = list.map(safeBook);
+    }catch(e){
+      showFormError("記録の読み込みに失敗しました。少し待ってから、もう一度開いてみてください。");
+      booksCache = Array.isArray(booksCache) ? booksCache : [];
+    }
     return booksCache;
   }
   async function saveBooks(books){
+    const prev = booksCache;
     booksCache = books;
-    await fetch("/api/books", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(books),
-    });
+    try{
+      const res = await fetch("/api/books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(books),
+      });
+      if(!res.ok){
+        const info = await res.json().catch(()=>({}));
+        throw new Error(info.error || "保存に失敗しました");
+      }
+      return true;
+    }catch(e){
+      booksCache = prev;
+      showFormError("保存に失敗しました。入力内容を見直して、もう一度お試しください。");
+      return false;
+    }
   }
 
   // ---- 星の入力 ----
@@ -308,6 +359,72 @@
     });
   }
 
+  const LIMITS = { title: 100, author: 60, memo: 500 };
+
+  function showFormError(message){
+    const box = document.getElementById("form-error");
+    box.textContent = message;
+    box.classList.add("show");
+  }
+  function clearFormError(){
+    const box = document.getElementById("form-error");
+    box.textContent = "";
+    box.classList.remove("show");
+  }
+  function showFieldError(field, message){
+    document.getElementById(`field-${field}`).classList.add("has-error");
+    const el = document.getElementById(`err-${field}`);
+    el.textContent = message;
+    el.style.display = "block";
+  }
+  function clearFieldErrors(){
+    ["title","author","date","memo"].forEach(field=>{
+      const wrap = document.getElementById(`field-${field}`);
+      if(wrap) wrap.classList.remove("has-error");
+      const el = document.getElementById(`err-${field}`);
+      if(el){ el.style.display = "none"; el.textContent = ""; }
+    });
+  }
+
+  // 空欄・長すぎる値・変な日付などをここでまとめて弾き、赤字で理由を出す
+  function validateForm({ title, author, date, memo }){
+    clearFieldErrors();
+    clearFormError();
+    let firstInvalid = null;
+    const fail = (field, message) => {
+      showFieldError(field, message);
+      if(!firstInvalid) firstInvalid = field;
+    };
+
+    if(!title){
+      fail("title", "タイトルを入力してください。");
+    } else if(title.length > LIMITS.title){
+      fail("title", `タイトルは${LIMITS.title}文字以内にしてください(現在${title.length}文字)。`);
+    }
+
+    if(author.length > LIMITS.author){
+      fail("author", `著者名は${LIMITS.author}文字以内にしてください(現在${author.length}文字)。`);
+    }
+
+    if(date){
+      const d = new Date(date);
+      const valid = !isNaN(d.getTime()) && /^\d{4}-\d{2}-\d{2}$/.test(date);
+      if(!valid){
+        fail("date", "読んだ日は正しい日付を選んでください。");
+      }
+    }
+
+    if(memo.length > LIMITS.memo){
+      fail("memo", `メモは${LIMITS.memo}文字以内にしてください(現在${memo.length}文字)。`);
+    }
+
+    if(firstInvalid){
+      showFormError("入力内容をご確認ください。該当の項目を赤字で示しています。");
+      return false;
+    }
+    return true;
+  }
+
   function resetForm(){
     document.getElementById("f-title").value = "";
     document.getElementById("f-author").value = "";
@@ -319,32 +436,35 @@
     editingId = null;
     document.getElementById("save-btn").textContent = "棚に並べる";
     document.getElementById("cancel-edit-btn").style.display = "none";
+    clearFieldErrors();
+    clearFormError();
   }
 
   document.getElementById("save-btn").addEventListener("click", async ()=>{
     const title = document.getElementById("f-title").value.trim();
-    if(!title){
-      alert("タイトルを入れてください");
-      return;
-    }
     const author = document.getElementById("f-author").value.trim();
-    const date = document.getElementById("f-date").value || new Date().toISOString().slice(0,10);
+    const date = document.getElementById("f-date").value;
     const memo = document.getElementById("f-memo").value.trim();
     const category = document.getElementById("f-category").value || DEFAULT_CATEGORY;
+
+    if(!validateForm({ title, author, date, memo })) return;
+
+    const finalDate = date || new Date().toISOString().slice(0,10);
 
     let books = await loadBooks();
     if(editingId){
       books = books.map(b => b.id === editingId
-        ? { ...b, title, author, date, memo, category, rating: currentRating }
+        ? { ...b, title, author, date: finalDate, memo, category, rating: currentRating }
         : b);
     } else {
       books.push({
         id: Date.now(),
-        title, author, date, memo, category,
+        title, author, date: finalDate, memo, category,
         rating: currentRating,
       });
     }
-    await saveBooks(books);
+    const ok = await saveBooks(books);
+    if(!ok) return;
     resetForm();
     render();
   });

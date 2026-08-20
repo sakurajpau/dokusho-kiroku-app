@@ -7,10 +7,30 @@ const DATA_FILE = path.join(__dirname, "books.json");
 
 function loadBooks(){
   try{
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    return Array.isArray(data) ? data : [];
   }catch(e){
     return [];
   }
+}
+
+const LIMITS = { title: 100, author: 60, memo: 500 };
+
+// クライアントからの入力は信用せず、保存前に必ず正しい形へそろえる
+function sanitizeBook(raw){
+  if(typeof raw !== "object" || raw === null) return null;
+  const title = typeof raw.title === "string" ? raw.title.trim().slice(0, LIMITS.title) : "";
+  if(!title) return null;
+  const rating = Number(raw.rating);
+  return {
+    id: Number.isFinite(Number(raw.id)) ? Number(raw.id) : Date.now(),
+    title,
+    author: typeof raw.author === "string" ? raw.author.trim().slice(0, LIMITS.author) : "",
+    date: typeof raw.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : "",
+    memo: typeof raw.memo === "string" ? raw.memo.trim().slice(0, LIMITS.memo) : "",
+    category: typeof raw.category === "string" && raw.category ? raw.category : "自己啓発",
+    rating: Number.isFinite(rating) ? Math.min(5, Math.max(0, Math.round(rating))) : 0,
+  };
 }
 
 function saveBooks(books){
@@ -42,18 +62,49 @@ function handleGetBooks(req, res){
   res.end(JSON.stringify(loadBooks()));
 }
 
+const MAX_BODY_SIZE = 2 * 1024 * 1024; // 2MB — 極端に大きい送信でサーバーが落ちないよう上限を設ける
+
 function handleSaveBooks(req, res){
   let body = "";
-  req.on("data", (chunk) => (body += chunk));
+  let tooLarge = false;
+  req.on("data", (chunk) => {
+    if(tooLarge) return;
+    body += chunk;
+    if(body.length > MAX_BODY_SIZE){
+      tooLarge = true;
+      res.writeHead(413, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "データが大きすぎます" }));
+      req.destroy();
+    }
+  });
   req.on("end", () => {
+    if(tooLarge) return;
+    let parsed;
     try{
-      const books = JSON.parse(body);
+      parsed = JSON.parse(body);
+    }catch(e){
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "データの形式が正しくありません" }));
+      return;
+    }
+    if(!Array.isArray(parsed)){
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "本の一覧はリスト形式で送ってください" }));
+      return;
+    }
+    const books = parsed.map(sanitizeBook).filter(Boolean);
+    if(books.length !== parsed.length){
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "タイトルが空の本があります" }));
+      return;
+    }
+    try{
       saveBooks(books);
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ ok: true }));
     }catch(e){
-      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ ok: false, error: e.message }));
+      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "保存に失敗しました" }));
     }
   });
 }
