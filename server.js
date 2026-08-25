@@ -64,6 +64,10 @@ const server = http.createServer((req, res) => {
   return serveStatic(req, res);
 });
 
-server.listen(PORT, () => {
-  console.log(`読書記録アプリ起動中: http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`読書記録アプリ起動中: http://localhost:${PORT}`);
+  });
+}
+
+module.exports = server;
