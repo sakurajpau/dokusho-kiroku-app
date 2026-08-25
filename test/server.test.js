@@ -42,3 +42,11 @@ test("存在しないパスは404を返す", async () => {
     assert.equal(res.status, 404);
   });
 });
+
+// 第12回：CIが赤くなることを確認するための、わざと失敗するテスト
+test("【わざと失敗】存在しないパスが200を返すことを期待する（成立しない）", async () => {
+  await withServer(async (port) => {
+    const res = await fetch(`http://localhost:${port}/no-such-page`);
+    assert.equal(res.status, 200);
+  });
+});
