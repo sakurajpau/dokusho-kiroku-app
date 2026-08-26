@@ -1,20 +1,43 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { openDb } = require("./db/connection");
+const { importFromJson } = require("./db/import-from-json");
 
 const PORT = process.env.PORT || 3100;
-const DATA_FILE = path.join(__dirname, "books.json");
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data.db");
+const db = openDb(DB_PATH);
+
+// 初回起動時、data.dbが空ならbooks.jsonから取り込む（ephemeralなホスティングでの自動復元用）
+const bookCount = db.prepare("SELECT COUNT(*) AS n FROM books").get().n;
+if (bookCount === 0) {
+  importFromJson(db, path.join(__dirname, "books.json"));
+}
 
 function loadBooks(){
-  try{
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-  }catch(e){
-    return [];
-  }
+  return db.prepare("SELECT * FROM books ORDER BY id").all();
 }
 
 function saveBooks(books){
-  fs.writeFileSync(DATA_FILE, JSON.stringify(books, null, 2), "utf8");
+  const del = db.prepare("DELETE FROM books");
+  const insert = db.prepare(
+    `INSERT INTO books (id, title, author, date, memo, rating, category, pages)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  db.exec("BEGIN");
+  try {
+    del.run();
+    for (const b of books) {
+      insert.run(
+        b.id, b.title, b.author || "", b.date || "",
+        b.memo || "", b.rating || 0, b.category || "", b.pages || null
+      );
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
 }
 
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
