@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+process.env.DB_PATH = ":memory:";
 const server = require("../server.js");
 
 function withServer(run) {
@@ -40,5 +41,23 @@ test("存在しないパスは404を返す", async () => {
   await withServer(async (port) => {
     const res = await fetch(`http://localhost:${port}/no-such-page`);
     assert.equal(res.status, 404);
+  });
+});
+
+test("マイグレーションで追加した pages 列が保存・取得できる", async () => {
+  await withServer(async (port) => {
+    const book = {
+      id: 999, title: "テスト本", author: "テスト著者",
+      date: "2026-01-01", memo: "", rating: 3, category: "小説", pages: 250,
+    };
+    await fetch(`http://localhost:${port}/api/books`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([book]),
+    });
+    const res = await fetch(`http://localhost:${port}/api/books`);
+    const data = await res.json();
+    assert.equal(data.length, 1);
+    assert.equal(data[0].pages, 250);
   });
 });
