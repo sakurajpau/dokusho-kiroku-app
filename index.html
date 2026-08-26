@@ -229,11 +229,7 @@
     </div>
     <div class="field">
       <label>棚（カテゴリ）</label>
-      <select id="f-category">
-        <option value="自己啓発">自己啓発</option>
-        <option value="小説">小説</option>
-        <option value="トラベル">トラベル</option>
-      </select>
+      <select id="f-category"></select>
     </div>
     <div class="field">
       <label>評価</label>
@@ -269,8 +265,36 @@
   let selectedId = null;
   let booksCache = [];
 
-  const CATEGORIES = ["自己啓発", "小説", "トラベル"];
-  const DEFAULT_CATEGORY = CATEGORIES[0];
+  const BASE_CATEGORIES = ["自己啓発", "小説", "トラベル"];
+  const DEFAULT_CATEGORY = BASE_CATEGORIES[0];
+  let extraCategories = [];
+  const ADD_NEW_VALUE = "__add_new__";
+
+  function allCategories(){
+    const fromBooks = booksCache.map(b => b.category).filter(Boolean);
+    return [...new Set([...BASE_CATEGORIES, ...extraCategories, ...fromBooks])];
+  }
+
+  function populateCategorySelect(selected){
+    const sel = document.getElementById("f-category");
+    const cats = allCategories();
+    sel.innerHTML = cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")
+      + `<option value="${ADD_NEW_VALUE}">＋ 新しい棚を追加...</option>`;
+    sel.value = cats.includes(selected) ? selected : DEFAULT_CATEGORY;
+  }
+
+  document.getElementById("f-category").addEventListener("change", (e)=>{
+    if(e.target.value !== ADD_NEW_VALUE) return;
+    const name = (prompt("新しい棚の名前を入力してください") || "").trim();
+    if(!name){
+      populateCategorySelect(DEFAULT_CATEGORY);
+      return;
+    }
+    if(!extraCategories.includes(name) && !BASE_CATEGORIES.includes(name)){
+      extraCategories.push(name);
+    }
+    populateCategorySelect(name);
+  });
 
   const SPINE_COLORS = ["#a9432f","#c98c4a","#7c8a5e","#5b6b73","#8a5a44","#b5763f","#6b4d3a","#9c6b4f","#4f6d5a","#8a6a8f"];
   function spineColor(title){
@@ -313,7 +337,7 @@
     document.getElementById("f-author").value = "";
     document.getElementById("f-date").value = "";
     document.getElementById("f-memo").value = "";
-    document.getElementById("f-category").value = DEFAULT_CATEGORY;
+    populateCategorySelect(DEFAULT_CATEGORY);
     currentRating = 0;
     renderStars();
     editingId = null;
@@ -358,7 +382,7 @@
     document.getElementById("f-author").value = book.author;
     document.getElementById("f-date").value = book.date;
     document.getElementById("f-memo").value = book.memo;
-    document.getElementById("f-category").value = book.category || DEFAULT_CATEGORY;
+    populateCategorySelect(book.category || DEFAULT_CATEGORY);
     currentRating = book.rating;
     renderStars();
     editingId = id;
@@ -452,8 +476,9 @@
     }
 
     hint.textContent = "本をタップすると詳細が見られます";
+    populateCategorySelect(document.getElementById("f-category").value || DEFAULT_CATEGORY);
 
-    shelvesEl.innerHTML = CATEGORIES.map(cat => {
+    shelvesEl.innerHTML = allCategories().map(cat => {
       const catBooks = books.filter(b => (b.category || DEFAULT_CATEGORY) === cat);
       const spines = catBooks.map(b => {
         const height = 106 + (b.rating || 0) * 9 + (b.title.length % 5) * 3;
