@@ -137,6 +137,9 @@
     margin-top:12px;font-size:.87rem;color:var(--ink);white-space:pre-wrap;line-height:1.8;
     padding-top:12px;border-top:1px dashed var(--line);
   }
+  .book .reading-time{
+    font-size:.76rem;color:var(--accent-soft);letter-spacing:.06em;margin-bottom:8px;
+  }
   .book .actions{margin-top:14px;display:flex;gap:8px}
   .empty{text-align:center;color:var(--sub);padding:50px 0;font-size:.9rem;letter-spacing:.05em}
 
@@ -238,6 +241,10 @@
       </div>
     </div>
     <div class="field">
+      <label>読書にかかった時間（分）</label>
+      <input type="number" id="f-reading-time" min="0" step="1" placeholder="例：180">
+    </div>
+    <div class="field">
       <label>メモ・感想</label>
       <textarea id="f-memo" placeholder="心に残ったこと、引用など"></textarea>
     </div>
@@ -336,6 +343,7 @@
     document.getElementById("f-title").value = "";
     document.getElementById("f-author").value = "";
     document.getElementById("f-date").value = "";
+    document.getElementById("f-reading-time").value = "";
     document.getElementById("f-memo").value = "";
     populateCategorySelect(DEFAULT_CATEGORY);
     currentRating = 0;
@@ -353,18 +361,20 @@
     }
     const author = document.getElementById("f-author").value.trim();
     const date = document.getElementById("f-date").value || new Date().toISOString().slice(0,10);
+    const readingMinutesRaw = document.getElementById("f-reading-time").value;
+    const reading_minutes = readingMinutesRaw === "" ? null : Number(readingMinutesRaw);
     const memo = document.getElementById("f-memo").value.trim();
     const category = document.getElementById("f-category").value || DEFAULT_CATEGORY;
 
     let books = await loadBooks();
     if(editingId){
       books = books.map(b => b.id === editingId
-        ? { ...b, title, author, date, memo, category, rating: currentRating }
+        ? { ...b, title, author, date, reading_minutes, memo, category, rating: currentRating }
         : b);
     } else {
       books.push({
         id: Date.now(),
-        title, author, date, memo, category,
+        title, author, date, reading_minutes, memo, category,
         rating: currentRating,
       });
     }
@@ -381,6 +391,7 @@
     document.getElementById("f-title").value = book.title;
     document.getElementById("f-author").value = book.author;
     document.getElementById("f-date").value = book.date;
+    document.getElementById("f-reading-time").value = book.reading_minutes ?? "";
     document.getElementById("f-memo").value = book.memo;
     populateCategorySelect(book.category || DEFAULT_CATEGORY);
     currentRating = book.rating;
@@ -517,7 +528,12 @@
         </div>
         <div class="author">${escapeHtml(b.author || "著者不明")}</div>
         <div class="date">${b.date || ""}</div>
-        ${b.memo ? `<div class="memo">${escapeHtml(b.memo)}</div>` : ""}
+        ${b.memo || b.reading_minutes ? `
+          <div class="memo">
+            ${b.reading_minutes ? `<div class="reading-time">読書時間：${formatReadingTime(b.reading_minutes)}</div>` : ""}
+            ${b.memo ? `<div>${escapeHtml(b.memo)}</div>` : ""}
+          </div>
+        ` : ""}
         <div class="actions">
           <button class="btn small ghost" onclick="startEdit(${b.id})">編集</button>
           <button class="btn small danger" onclick="deleteBook(${b.id})">削除</button>
@@ -525,6 +541,14 @@
         </div>
       </div>
     `;
+  }
+
+  function formatReadingTime(minutes){
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if(h && m) return `${h}時間${m}分`;
+    if(h) return `${h}時間`;
+    return `${m}分`;
   }
 
   function escapeHtml(s){
