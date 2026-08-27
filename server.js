@@ -21,8 +21,8 @@ function loadBooks(){
 function saveBooks(books){
   const del = db.prepare("DELETE FROM books");
   const insert = db.prepare(
-    `INSERT INTO books (id, title, author, date, memo, rating, category, pages)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO books (id, title, author, date, memo, rating, category, pages, reading_minutes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   db.exec("BEGIN");
   try {
@@ -30,7 +30,8 @@ function saveBooks(books){
     for (const b of books) {
       insert.run(
         b.id, b.title, b.author || "", b.date || "",
-        b.memo || "", b.rating || 0, b.category || "", b.pages || null
+        b.memo || "", b.rating || 0, b.category || "", b.pages || null,
+        b.reading_minutes || null
       );
     }
     db.exec("COMMIT");
