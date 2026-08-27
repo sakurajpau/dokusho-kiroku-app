@@ -81,7 +81,13 @@ function handleSaveBooks(req, res){
   });
 }
 
+function handleHealth(req, res){
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ ok: true, time: new Date().toISOString() }));
+}
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith("/health")) return handleHealth(req, res);
   if (req.url.startsWith("/api/books") && req.method === "GET") return handleGetBooks(req, res);
   if (req.url.startsWith("/api/books") && req.method === "POST") return handleSaveBooks(req, res);
   return serveStatic(req, res);
