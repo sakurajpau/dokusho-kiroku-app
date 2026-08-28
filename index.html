@@ -191,12 +191,69 @@
     .stat .num{font-size:1.2rem}
     h1{font-size:1.7rem;letter-spacing:.14em}
   }
+
+  /* ---- 認証画面 ---- */
+  .auth-wrap{max-width:380px;margin:80px auto;padding:0 18px}
+  .auth-tabs{display:flex;gap:8px;margin-bottom:18px}
+  .auth-tabs button{
+    flex:1;padding:10px;border:1px solid var(--line);background:var(--paper);
+    color:var(--sub);font-family:inherit;font-size:.85rem;letter-spacing:.08em;
+    border-radius:6px;cursor:pointer;
+  }
+  .auth-tabs button.active{background:var(--accent);color:#faf6ec;border-color:var(--accent)}
+  .auth-error{color:#a9432f;font-size:.8rem;margin-top:10px;min-height:1.2em}
+  .auth-hint{color:var(--sub);font-size:.75rem;margin-top:14px;text-align:center}
+  .user-bar{
+    display:flex;justify-content:space-between;align-items:center;
+    font-size:.78rem;color:var(--sub);margin:0 0 14px;letter-spacing:.05em;
+  }
+  .user-bar b{color:var(--ink)}
+  .member-notice{
+    background:var(--paper);border:1px solid var(--line);border-radius:8px;
+    padding:14px 16px;margin-bottom:20px;font-size:.82rem;color:var(--sub);
+  }
 </style>
 </head>
 <body>
 
-<div class="wrap">
+<div class="auth-wrap" id="auth-wrap" style="display:none;">
+  <div class="auth-tabs">
+    <button id="tab-login" class="active">ログイン</button>
+    <button id="tab-signup">はじめて使う</button>
+  </div>
+  <div class="panel" id="login-panel">
+    <div class="field">
+      <label>ユーザー名</label>
+      <input type="text" id="login-username" placeholder="ユーザー名">
+    </div>
+    <div class="field">
+      <label>パスワード</label>
+      <input type="password" id="login-password" placeholder="パスワード">
+    </div>
+    <button class="btn" id="login-btn">ログイン</button>
+    <div class="auth-error" id="login-error"></div>
+  </div>
+  <div class="panel" id="signup-panel" style="display:none;">
+    <div class="field">
+      <label>ユーザー名（3文字以上）</label>
+      <input type="text" id="signup-username" placeholder="ユーザー名">
+    </div>
+    <div class="field">
+      <label>パスワード（8文字以上）</label>
+      <input type="password" id="signup-password" placeholder="パスワード">
+    </div>
+    <button class="btn" id="signup-btn">登録する</button>
+    <div class="auth-error" id="signup-error"></div>
+    <div class="auth-hint">最初に登録した人が管理者になります</div>
+  </div>
+</div>
+
+<div class="wrap" id="app-content" style="display:none;">
   <div class="hero">
+    <div class="user-bar" id="user-bar">
+      <span><b id="user-name"></b>（<span id="user-role"></span>）</span>
+      <button class="btn small ghost" id="logout-btn">ログアウト</button>
+    </div>
     <svg viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg">
       <path d="M10,50 Q10,15 45,12" fill="none" stroke="#c98c4a" stroke-width="1.4"/>
       <path d="M110,50 Q110,15 75,12" fill="none" stroke="#c98c4a" stroke-width="1.4"/>
@@ -211,7 +268,7 @@
 
   <div class="stats" id="stats"></div>
 
-  <div class="panel">
+  <div class="panel" id="add-panel">
     <h2>本を記録する</h2>
     <div class="field">
       <label>タイトル</label>
@@ -245,6 +302,10 @@
     <button class="btn ghost" id="cancel-edit-btn" style="display:none;margin-left:8px;">編集をやめる</button>
   </div>
 
+  <div class="member-notice" id="member-notice" style="display:none;">
+    記録の追加・編集・削除は管理者（admin）だけができます。あなたは一般（member）権限のため、閲覧のみできます。
+  </div>
+
   <div class="toolbar">
     <input type="text" id="search" placeholder="タイトル・著者で検索">
     <select id="sort">
@@ -264,6 +325,107 @@
   let editingId = null;
   let selectedId = null;
   let booksCache = [];
+  let currentUser = null;
+
+  // ---- 認証 ----
+  async function fetchMe(){
+    const res = await fetch("/api/me");
+    const data = await res.json();
+    return data.user;
+  }
+
+  function applyRoleUi(){
+    const isAdmin = currentUser && currentUser.role === "admin";
+    document.getElementById("add-panel").style.display = isAdmin ? "" : "none";
+    document.getElementById("member-notice").style.display = isAdmin ? "none" : "";
+  }
+
+  async function startApp(){
+    document.getElementById("auth-wrap").style.display = "none";
+    document.getElementById("app-content").style.display = "";
+    document.getElementById("user-name").textContent = currentUser.username;
+    document.getElementById("user-role").textContent = currentUser.role === "admin" ? "管理者" : "一般";
+    applyRoleUi();
+    render();
+  }
+
+  async function initAuth(){
+    currentUser = await fetchMe();
+    if(currentUser){
+      startApp();
+    }else{
+      document.getElementById("app-content").style.display = "none";
+      document.getElementById("auth-wrap").style.display = "";
+    }
+  }
+
+  function clearAuthForms(){
+    document.getElementById("login-username").value = "";
+    document.getElementById("login-password").value = "";
+    document.getElementById("signup-username").value = "";
+    document.getElementById("signup-password").value = "";
+    document.getElementById("login-error").textContent = "";
+    document.getElementById("signup-error").textContent = "";
+  }
+
+  function switchAuthTab(mode){
+    const isLogin = mode === "login";
+    document.getElementById("tab-login").classList.toggle("active", isLogin);
+    document.getElementById("tab-signup").classList.toggle("active", !isLogin);
+    document.getElementById("login-panel").style.display = isLogin ? "" : "none";
+    document.getElementById("signup-panel").style.display = isLogin ? "none" : "";
+  }
+  document.getElementById("tab-login").addEventListener("click", ()=>switchAuthTab("login"));
+  document.getElementById("tab-signup").addEventListener("click", ()=>switchAuthTab("signup"));
+
+  document.getElementById("login-btn").addEventListener("click", async ()=>{
+    const errorEl = document.getElementById("login-error");
+    errorEl.textContent = "";
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value;
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if(!data.ok){
+      errorEl.textContent = data.error || "ログインできませんでした";
+      return;
+    }
+    currentUser = { username: data.username, role: data.role };
+    clearAuthForms();
+    startApp();
+  });
+
+  document.getElementById("signup-btn").addEventListener("click", async ()=>{
+    const errorEl = document.getElementById("signup-error");
+    errorEl.textContent = "";
+    const username = document.getElementById("signup-username").value.trim();
+    const password = document.getElementById("signup-password").value;
+    const res = await fetch("/api/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if(!data.ok){
+      errorEl.textContent = data.error || "登録できませんでした";
+      return;
+    }
+    currentUser = { username: data.username, role: data.role };
+    clearAuthForms();
+    startApp();
+  });
+
+  document.getElementById("logout-btn").addEventListener("click", async ()=>{
+    await fetch("/api/logout", { method: "POST" });
+    currentUser = null;
+    document.getElementById("app-content").style.display = "none";
+    document.getElementById("auth-wrap").style.display = "";
+    switchAuthTab("login");
+    clearAuthForms();
+  });
 
   const BASE_CATEGORIES = ["自己啓発", "小説", "トラベル"];
   const DEFAULT_CATEGORY = BASE_CATEGORIES[0];
@@ -305,6 +467,12 @@
 
   async function loadBooks(){
     const res = await fetch("/api/books");
+    if(res.status === 401){
+      currentUser = null;
+      document.getElementById("app-content").style.display = "none";
+      document.getElementById("auth-wrap").style.display = "";
+      return [];
+    }
     booksCache = await res.json();
     return booksCache;
   }
@@ -519,8 +687,10 @@
         <div class="date">${b.date || ""}</div>
         ${b.memo ? `<div class="memo">${escapeHtml(b.memo)}</div>` : ""}
         <div class="actions">
-          <button class="btn small ghost" onclick="startEdit(${b.id})">編集</button>
-          <button class="btn small danger" onclick="deleteBook(${b.id})">削除</button>
+          ${currentUser && currentUser.role === "admin" ? `
+            <button class="btn small ghost" onclick="startEdit(${b.id})">編集</button>
+            <button class="btn small danger" onclick="deleteBook(${b.id})">削除</button>
+          ` : ""}
           <button class="btn small ghost" onclick="closeDetail()">閉じる</button>
         </div>
       </div>
@@ -533,7 +703,7 @@
       .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
-  render();
+  initAuth();
 </script>
 
 </body>
