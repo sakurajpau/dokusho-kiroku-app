@@ -329,9 +329,13 @@
 
   // ---- 認証 ----
   async function fetchMe(){
-    const res = await fetch("/api/me");
-    const data = await res.json();
-    return data.user;
+    try{
+      const res = await fetch("/api/me");
+      const data = await res.json();
+      return data.user;
+    }catch(e){
+      return null;
+    }
   }
 
   function applyRoleUi(){
@@ -378,41 +382,53 @@
   document.getElementById("tab-login").addEventListener("click", ()=>switchAuthTab("login"));
   document.getElementById("tab-signup").addEventListener("click", ()=>switchAuthTab("signup"));
 
-  document.getElementById("login-btn").addEventListener("click", async ()=>{
-    const errorEl = document.getElementById("login-error");
+  // サーバーがスリープ中だと起きるまで50秒以上かかることがあるため、
+  // ボタンを「送信中」表示にし、失敗時は必ずエラーを出す（無反応に見えないように）
+  async function submitAuthForm(url, username, password, btn, errorEl){
     errorEl.textContent = "";
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "送信中…（サーバーが休止中だと時間がかかります）";
+    try{
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if(!data.ok){
+        errorEl.textContent = data.error || "処理できませんでした";
+        return null;
+      }
+      return data;
+    }catch(e){
+      errorEl.textContent = "サーバーに接続できませんでした。少し待ってからもう一度お試しください。";
+      return null;
+    }finally{
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
+  document.getElementById("login-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("login-btn");
+    const errorEl = document.getElementById("login-error");
     const username = document.getElementById("login-username").value.trim();
     const password = document.getElementById("login-password").value;
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if(!data.ok){
-      errorEl.textContent = data.error || "ログインできませんでした";
-      return;
-    }
+    const data = await submitAuthForm("/api/login", username, password, btn, errorEl);
+    if(!data) return;
     currentUser = { username: data.username, role: data.role };
     clearAuthForms();
     startApp();
   });
 
   document.getElementById("signup-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("signup-btn");
     const errorEl = document.getElementById("signup-error");
-    errorEl.textContent = "";
     const username = document.getElementById("signup-username").value.trim();
     const password = document.getElementById("signup-password").value;
-    const res = await fetch("/api/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if(!data.ok){
-      errorEl.textContent = data.error || "登録できませんでした";
-      return;
-    }
+    const data = await submitAuthForm("/api/signup", username, password, btn, errorEl);
+    if(!data) return;
     currentUser = { username: data.username, role: data.role };
     clearAuthForms();
     startApp();
