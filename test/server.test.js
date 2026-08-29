@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 process.env.DB_PATH = ":memory:";
+process.env.ADMIN_USERNAME = "test_admin_user";
 const server = require("../server.js");
 
 function withServer(run) {
@@ -36,12 +37,9 @@ test("GET /api/books はログインしていないと401を返す", async () =>
   });
 });
 
-// 注意: このテストが本ファイルで最初のサインアップになるため、
-// このユーザーが自動的にadmin(編集可)になる。編集操作(POST)を含む
-// テストは、必ずこのテストより先に置くこと。
 test("マイグレーションで追加した pages 列が保存・取得できる", async () => {
   await withServer(async (port) => {
-    const cookie = await signupAndGetCookie(port, "test_pages_admin");
+    const cookie = await signupAndGetCookie(port, "test_admin_user");
     const book = {
       id: 999, title: "テスト本", author: "テスト著者",
       date: "2026-01-01", memo: "", rating: 3, category: "小説", pages: 250,
