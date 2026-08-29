@@ -2,12 +2,15 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const Stripe = require("stripe");
 const { openDb } = require("./db/connection");
 const { importFromJson } = require("./db/import-from-json");
 
 const PORT = process.env.PORT || 3100;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data.db");
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "sakurajpau";
+const FREE_BOOK_LIMIT = 10;
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const db = openDb(DB_PATH);
 
 // 初回起動時、data.dbが空ならbooks.jsonから取り込む（ephemeralなホスティングでの自動復元用）
@@ -45,7 +48,8 @@ function saveBooks(books){
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 
 function serveStatic(req, res){
-  const urlPath = req.url === "/" ? "/index.html" : req.url.split("?")[0];
+  const pathOnly = req.url.split("?")[0];
+  const urlPath = pathOnly === "/" ? "/index.html" : pathOnly;
   const filePath = path.join(__dirname, decodeURIComponent(urlPath));
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403);
@@ -67,12 +71,19 @@ function handleGetBooks(req, res){
   res.end(JSON.stringify(loadBooks()));
 }
 
-function handleSaveBooks(req, res){
+function handleSaveBooks(req, res, user){
   let body = "";
   req.on("data", (chunk) => (body += chunk));
   req.on("end", () => {
     try{
       const books = JSON.parse(body);
+      if(user.plan !== "paid" && books.length > FREE_BOOK_LIMIT){
+        res.writeHead(402, { "Content-Type": "application/json; charset=utf-8" });
+        return res.end(JSON.stringify({
+          ok: false,
+          error: `無料プランは${FREE_BOOK_LIMIT}冊までです。無制限プランへのアップグレードをご検討ください。`,
+        }));
+      }
       saveBooks(books);
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ ok: true }));
@@ -127,7 +138,7 @@ function getSessionUser(req){
   const token = cookies.session;
   if (!token) return null;
   const row = db.prepare(
-    `SELECT users.id, users.username, users.role FROM sessions
+    `SELECT users.id, users.username, users.role, users.plan FROM sessions
      JOIN users ON users.id = sessions.user_id
      WHERE sessions.token = ?`
   ).get(token);
@@ -173,7 +184,7 @@ async function handleSignup(req, res){
     "Content-Type": "application/json; charset=utf-8",
     "Set-Cookie": `session=${token}; HttpOnly; Path=/; SameSite=Lax`,
   });
-  res.end(JSON.stringify({ ok: true, username, role }));
+  res.end(JSON.stringify({ ok: true, username, role, plan: "free" }));
 }
 
 async function handleLogin(req, res){
@@ -190,7 +201,7 @@ async function handleLogin(req, res){
     "Content-Type": "application/json; charset=utf-8",
     "Set-Cookie": `session=${token}; HttpOnly; Path=/; SameSite=Lax`,
   });
-  res.end(JSON.stringify({ ok: true, username: user.username, role: user.role }));
+  res.end(JSON.stringify({ ok: true, username: user.username, role: user.role, plan: user.plan }));
 }
 
 function handleLogout(req, res){
@@ -245,6 +256,55 @@ async function handleCompleteReset(req, res){
   sendJson(res, 200, { ok: true });
 }
 
+// ---- 課金（Stripeテストモード：無制限プランのチェックアウト） ----
+
+function originOf(req){
+  const proto = req.headers["x-forwarded-proto"] || "http";
+  return `${proto}://${req.headers.host}`;
+}
+
+async function handleCreateCheckout(req, res, user){
+  if(!stripe) return sendJson(res, 500, { ok: false, error: "決済が設定されていません（STRIPE_SECRET_KEYが未設定）" });
+  const origin = originOf(req);
+  try{
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{
+        price_data: {
+          currency: "jpy",
+          product_data: { name: "読書記録アプリ 無制限プラン" },
+          unit_amount: 500,
+          recurring: { interval: "month" },
+        },
+        quantity: 1,
+      }],
+      success_url: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/?checkout=cancel`,
+      client_reference_id: String(user.id),
+    });
+    sendJson(res, 200, { ok: true, url: session.url });
+  }catch(e){
+    sendJson(res, 500, { ok: false, error: e.message });
+  }
+}
+
+async function handleConfirmCheckout(req, res, user){
+  if(!stripe) return sendJson(res, 500, { ok: false, error: "決済が設定されていません（STRIPE_SECRET_KEYが未設定）" });
+  const url = new URL(req.url, "http://localhost");
+  const sessionId = url.searchParams.get("session_id");
+  if(!sessionId) return sendJson(res, 400, { ok: false, error: "session_idがありません" });
+  try{
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if(session.client_reference_id !== String(user.id) || session.payment_status !== "paid"){
+      return sendJson(res, 400, { ok: false, error: "支払いが確認できませんでした" });
+    }
+    db.prepare("UPDATE users SET plan = 'paid' WHERE id = ?").run(user.id);
+    sendJson(res, 200, { ok: true, plan: "paid" });
+  }catch(e){
+    sendJson(res, 500, { ok: false, error: e.message });
+  }
+}
+
 function requireLogin(req, res){
   const user = getSessionUser(req);
   if (!user) {
@@ -273,7 +333,17 @@ const server = http.createServer((req, res) => {
     if (user.role !== "admin") {
       return sendJson(res, 403, { ok: false, error: "編集は管理者(admin)だけができます" });
     }
-    return handleSaveBooks(req, res);
+    return handleSaveBooks(req, res, user);
+  }
+  if (req.url === "/api/checkout" && req.method === "POST") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleCreateCheckout(req, res, user);
+  }
+  if (req.url.startsWith("/api/checkout/confirm") && req.method === "GET") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleConfirmCheckout(req, res, user);
   }
   return serveStatic(req, res);
 });

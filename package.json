@@ -5,7 +5,10 @@
   "description": "読書記録アプリ",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file-if-exists=.env server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "stripe": "^22.6.0"
   }
 }
