@@ -138,7 +138,7 @@ function getSessionUser(req){
   const token = cookies.session;
   if (!token) return null;
   const row = db.prepare(
-    `SELECT users.id, users.username, users.role, users.plan FROM sessions
+    `SELECT users.id, users.username, users.role, users.plan, users.payment_failed_at FROM sessions
      JOIN users ON users.id = sessions.user_id
      WHERE sessions.token = ?`
   ).get(token);
@@ -201,7 +201,7 @@ async function handleLogin(req, res){
     "Content-Type": "application/json; charset=utf-8",
     "Set-Cookie": `session=${token}; HttpOnly; Path=/; SameSite=Lax`,
   });
-  res.end(JSON.stringify({ ok: true, username: user.username, role: user.role, plan: user.plan }));
+  res.end(JSON.stringify({ ok: true, username: user.username, role: user.role, plan: user.plan, payment_failed_at: user.payment_failed_at }));
 }
 
 function handleLogout(req, res){
@@ -298,8 +298,67 @@ async function handleConfirmCheckout(req, res, user){
     if(session.client_reference_id !== String(user.id) || session.payment_status !== "paid"){
       return sendJson(res, 400, { ok: false, error: "支払いが確認できませんでした" });
     }
-    db.prepare("UPDATE users SET plan = 'paid' WHERE id = ?").run(user.id);
+    db.prepare("UPDATE users SET plan = 'paid', stripe_customer_id = ? WHERE id = ?")
+      .run(session.customer, user.id);
     sendJson(res, 200, { ok: true, plan: "paid" });
+  }catch(e){
+    sendJson(res, 500, { ok: false, error: e.message });
+  }
+}
+
+function readRawBody(req){
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+// Stripeからの通知(Webhook)。課金成功・失敗・解約に応じてユーザーの状態を自動で切り替える。
+async function handleStripeWebhook(req, res){
+  if(!stripe || !process.env.STRIPE_WEBHOOK_SECRET){
+    res.writeHead(500);
+    return res.end("webhookが設定されていません");
+  }
+  const rawBody = await readRawBody(req);
+  let event;
+  try{
+    event = stripe.webhooks.constructEvent(rawBody, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+  }catch(e){
+    res.writeHead(400);
+    return res.end(`Webhook Error: ${e.message}`);
+  }
+
+  const obj = event.data.object;
+  if(event.type === "invoice.payment_failed"){
+    // 支払い失敗: すぐには止めず、猶予として記録だけする(Stripeが自動で再試行する)
+    db.prepare("UPDATE users SET payment_failed_at = ? WHERE stripe_customer_id = ?")
+      .run(new Date().toISOString(), obj.customer);
+  }
+  if(event.type === "invoice.payment_succeeded"){
+    db.prepare("UPDATE users SET plan = 'paid', payment_failed_at = NULL WHERE stripe_customer_id = ?")
+      .run(obj.customer);
+  }
+  if(event.type === "customer.subscription.deleted"){
+    // 解約完了: 無料プランに戻す
+    db.prepare("UPDATE users SET plan = 'free', payment_failed_at = NULL WHERE stripe_customer_id = ?")
+      .run(obj.customer);
+  }
+  sendJson(res, 200, { received: true });
+}
+
+async function handleBillingPortal(req, res, user){
+  if(!stripe) return sendJson(res, 500, { ok: false, error: "決済が設定されていません（STRIPE_SECRET_KEYが未設定）" });
+  const row = db.prepare("SELECT stripe_customer_id FROM users WHERE id = ?").get(user.id);
+  if(!row || !row.stripe_customer_id){
+    return sendJson(res, 400, { ok: false, error: "有料プランの契約が見つかりません" });
+  }
+  try{
+    const session = await stripe.billingPortal.sessions.create({
+      customer: row.stripe_customer_id,
+      return_url: `${originOf(req)}/`,
+    });
+    sendJson(res, 200, { ok: true, url: session.url });
   }catch(e){
     sendJson(res, 500, { ok: false, error: e.message });
   }
@@ -344,6 +403,14 @@ const server = http.createServer((req, res) => {
     const user = requireLogin(req, res);
     if (!user) return;
     return handleConfirmCheckout(req, res, user);
+  }
+  if (req.url === "/api/stripe/webhook" && req.method === "POST") {
+    return handleStripeWebhook(req, res);
+  }
+  if (req.url === "/api/billing-portal" && req.method === "POST") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleBillingPortal(req, res, user);
   }
   return serveStatic(req, res);
 });

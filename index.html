@@ -275,6 +275,16 @@
     <button class="btn small" id="upgrade-btn">無制限プランにする（月500円・テスト決済）</button>
   </div>
 
+  <div class="plan-banner" id="paid-plan-bar" style="display:none;">
+    <span>無制限プランをご利用中です</span>
+    <button class="btn small ghost" id="cancel-plan-btn">解約する</button>
+  </div>
+
+  <div class="plan-banner" id="payment-failed-banner" style="display:none;background:#fdeaea;border-color:#e0a3a3;">
+    <span>お支払いに失敗しています。カード情報をご確認ください（このままだと停止される場合があります）</span>
+    <button class="btn small ghost" id="fix-payment-btn">カードを確認する</button>
+  </div>
+
   <div class="stats" id="stats"></div>
 
   <div class="panel" id="add-panel">
@@ -356,26 +366,30 @@
   function applyPlanUi(){
     const banner = document.getElementById("plan-banner");
     const badge = document.getElementById("plan-badge");
+    const paidBar = document.getElementById("paid-plan-bar");
+    const failedBanner = document.getElementById("payment-failed-banner");
     const isPaid = currentUser && currentUser.plan === "paid";
     badge.style.display = isPaid ? "" : "none";
+    failedBanner.style.display = (currentUser && currentUser.payment_failed_at) ? "" : "none";
+
     if(!currentUser || isPaid){
       banner.style.display = "none";
-      return;
+    }else{
+      banner.style.display = "";
+      document.getElementById("plan-banner-text").textContent =
+        `無料プランは本を${10}冊まで記録できます（現在${booksCache.length}冊）`;
     }
-    banner.style.display = "";
-    document.getElementById("plan-banner-text").textContent =
-      `無料プランは本を${10}冊まで記録できます（現在${booksCache.length}冊）`;
+    paidBar.style.display = isPaid ? "" : "none";
   }
 
-  document.getElementById("upgrade-btn").addEventListener("click", async ()=>{
-    const btn = document.getElementById("upgrade-btn");
+  async function goToStripe(endpoint, btn, busyText, idleText){
     btn.disabled = true;
-    btn.textContent = "決済ページを準備中…";
+    btn.textContent = busyText;
     try{
-      const res = await fetch("/api/checkout", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
       if(!data.ok){
-        alert(data.error || "決済ページを開けませんでした");
+        alert(data.error || "ページを開けませんでした");
         return;
       }
       window.location.href = data.url;
@@ -383,8 +397,23 @@
       alert("サーバーに接続できませんでした");
     }finally{
       btn.disabled = false;
-      btn.textContent = "無制限プランにする（月500円・テスト決済）";
+      btn.textContent = idleText;
     }
+  }
+
+  document.getElementById("upgrade-btn").addEventListener("click", ()=>{
+    const btn = document.getElementById("upgrade-btn");
+    goToStripe("/api/checkout", btn, "決済ページを準備中…", "無制限プランにする（月500円・テスト決済）");
+  });
+
+  document.getElementById("cancel-plan-btn").addEventListener("click", ()=>{
+    const btn = document.getElementById("cancel-plan-btn");
+    goToStripe("/api/billing-portal", btn, "準備中…", "解約する");
+  });
+
+  document.getElementById("fix-payment-btn").addEventListener("click", ()=>{
+    const btn = document.getElementById("fix-payment-btn");
+    goToStripe("/api/billing-portal", btn, "準備中…", "カードを確認する");
   });
 
   async function handleCheckoutRedirect(){
@@ -479,7 +508,7 @@
     const password = document.getElementById("login-password").value;
     const data = await submitAuthForm("/api/login", username, password, btn, errorEl);
     if(!data) return;
-    currentUser = { username: data.username, role: data.role, plan: data.plan };
+    currentUser = { username: data.username, role: data.role, plan: data.plan, payment_failed_at: data.payment_failed_at };
     clearAuthForms();
     startApp();
   });
@@ -491,7 +520,7 @@
     const password = document.getElementById("signup-password").value;
     const data = await submitAuthForm("/api/signup", username, password, btn, errorEl);
     if(!data) return;
-    currentUser = { username: data.username, role: data.role, plan: data.plan };
+    currentUser = { username: data.username, role: data.role, plan: data.plan, payment_failed_at: data.payment_failed_at };
     clearAuthForms();
     startApp();
   });
