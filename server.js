@@ -7,6 +7,7 @@ const { importFromJson } = require("./db/import-from-json");
 
 const PORT = process.env.PORT || 3100;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data.db");
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "sakurajpau";
 const db = openDb(DB_PATH);
 
 // 初回起動時、data.dbが空ならbooks.jsonから取り込む（ephemeralなホスティングでの自動復元用）
@@ -161,8 +162,7 @@ async function handleSignup(req, res){
   const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
   if (existing) return sendJson(res, 400, { ok: false, error: "そのユーザー名はすでに使われています" });
 
-  const userCount = db.prepare("SELECT COUNT(*) AS n FROM users").get().n;
-  const role = userCount === 0 ? "admin" : "member"; // 最初の1人だけ自動でadmin
+  const role = username === ADMIN_USERNAME ? "admin" : "member"; // 管理者は決まったユーザー名の人だけ
   const passwordHash = hashPassword(password);
   const info = db.prepare(
     "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)"
