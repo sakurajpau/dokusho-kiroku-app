@@ -255,7 +255,7 @@
 <div class="wrap" id="app-content" style="display:none;">
   <div class="hero">
     <div class="user-bar" id="user-bar">
-      <span><b id="user-name"></b>（<span id="user-role"></span>）</span>
+      <span><b id="user-name"></b>（<span id="user-role"></span>）<span id="plan-badge" style="display:none;color:#a9432f;"> ／ 無制限プラン</span></span>
       <button class="btn small ghost" id="logout-btn">ログアウト</button>
     </div>
     <svg viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg">
@@ -355,7 +355,9 @@
 
   function applyPlanUi(){
     const banner = document.getElementById("plan-banner");
+    const badge = document.getElementById("plan-badge");
     const isPaid = currentUser && currentUser.plan === "paid";
+    badge.style.display = isPaid ? "" : "none";
     if(!currentUser || isPaid){
       banner.style.display = "none";
       return;
