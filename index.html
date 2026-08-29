@@ -212,6 +212,11 @@
     background:var(--paper);border:1px solid var(--line);border-radius:8px;
     padding:14px 16px;margin-bottom:20px;font-size:.82rem;color:var(--sub);
   }
+  .plan-banner{
+    display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+    background:#fdf3e2;border:1px solid #e8cf9c;border-radius:8px;
+    padding:12px 16px;margin-bottom:20px;font-size:.82rem;color:var(--ink);
+  }
 </style>
 </head>
 <body>
@@ -263,6 +268,11 @@
     <div class="kicker">Reading Notes</div>
     <h1>読書記録</h1>
     <div class="sub">読んだ本を、棚に並べていく</div>
+  </div>
+
+  <div class="plan-banner" id="plan-banner" style="display:none;">
+    <span id="plan-banner-text"></span>
+    <button class="btn small" id="upgrade-btn">無制限プランにする（月500円・テスト決済）</button>
   </div>
 
   <div class="stats" id="stats"></div>
@@ -343,13 +353,64 @@
     document.getElementById("member-notice").style.display = isAdmin ? "none" : "";
   }
 
+  function applyPlanUi(){
+    const banner = document.getElementById("plan-banner");
+    const isPaid = currentUser && currentUser.plan === "paid";
+    if(!currentUser || isPaid){
+      banner.style.display = "none";
+      return;
+    }
+    banner.style.display = "";
+    document.getElementById("plan-banner-text").textContent =
+      `無料プランは本を${10}冊まで記録できます（現在${booksCache.length}冊）`;
+  }
+
+  document.getElementById("upgrade-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("upgrade-btn");
+    btn.disabled = true;
+    btn.textContent = "決済ページを準備中…";
+    try{
+      const res = await fetch("/api/checkout", { method: "POST" });
+      const data = await res.json();
+      if(!data.ok){
+        alert(data.error || "決済ページを開けませんでした");
+        return;
+      }
+      window.location.href = data.url;
+    }catch(e){
+      alert("サーバーに接続できませんでした");
+    }finally{
+      btn.disabled = false;
+      btn.textContent = "無制限プランにする（月500円・テスト決済）";
+    }
+  });
+
+  async function handleCheckoutRedirect(){
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get("checkout");
+    if(!checkout) return;
+    if(checkout === "success"){
+      const sessionId = params.get("session_id");
+      const res = await fetch(`/api/checkout/confirm?session_id=${encodeURIComponent(sessionId)}`);
+      const data = await res.json();
+      if(data.ok){
+        alert("お支払いが確認できました。無制限プランになりました🎉");
+        currentUser.plan = "paid";
+      }else{
+        alert(data.error || "お支払いの確認に失敗しました");
+      }
+    }
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+
   async function startApp(){
     document.getElementById("auth-wrap").style.display = "none";
     document.getElementById("app-content").style.display = "";
     document.getElementById("user-name").textContent = currentUser.username;
     document.getElementById("user-role").textContent = currentUser.role === "admin" ? "管理者" : "一般";
     applyRoleUi();
-    render();
+    await handleCheckoutRedirect();
+    await render();
   }
 
   async function initAuth(){
@@ -416,7 +477,7 @@
     const password = document.getElementById("login-password").value;
     const data = await submitAuthForm("/api/login", username, password, btn, errorEl);
     if(!data) return;
-    currentUser = { username: data.username, role: data.role };
+    currentUser = { username: data.username, role: data.role, plan: data.plan };
     clearAuthForms();
     startApp();
   });
@@ -428,7 +489,7 @@
     const password = document.getElementById("signup-password").value;
     const data = await submitAuthForm("/api/signup", username, password, btn, errorEl);
     if(!data) return;
-    currentUser = { username: data.username, role: data.role };
+    currentUser = { username: data.username, role: data.role, plan: data.plan };
     clearAuthForms();
     startApp();
   });
@@ -492,12 +553,19 @@
     return booksCache;
   }
   async function saveBooks(books){
-    booksCache = books;
-    await fetch("/api/books", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(books),
-    });
+    try{
+      const res = await fetch("/api/books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(books),
+      });
+      const data = await res.json();
+      if(!data.ok) return { ok: false, error: data.error };
+      booksCache = books;
+      return { ok: true };
+    }catch(e){
+      return { ok: false, error: "サーバーに接続できませんでした" };
+    }
   }
 
   // ---- 星の入力 ----
@@ -551,7 +619,11 @@
         rating: currentRating,
       });
     }
-    await saveBooks(books);
+    const result = await saveBooks(books);
+    if(!result.ok){
+      alert(result.error || "保存できませんでした");
+      return;
+    }
     resetForm();
     render();
   });
@@ -643,6 +715,7 @@
       : `本棚（全${all.length}件）`;
 
     renderStats();
+    applyPlanUi();
 
     if(all.length === 0){
       shelvesEl.innerHTML = "";
