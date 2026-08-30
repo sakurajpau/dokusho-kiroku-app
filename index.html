@@ -285,6 +285,14 @@
     <button class="btn small ghost" id="fix-payment-btn">カードを確認する</button>
   </div>
 
+  <div class="panel" id="recommend-panel">
+    <h2>AIによるおすすめ <span style="font-size:.7rem;color:var(--accent);font-weight:600;">有料プラン限定</span></h2>
+    <p style="color:var(--sub);font-size:.85rem;margin-bottom:12px;">今の本棚の傾向から、次に読む本をAIが提案します。</p>
+    <button class="btn small" id="recommend-btn">AIにおすすめしてもらう</button>
+    <div class="auth-error" id="recommend-error"></div>
+    <div id="recommend-result" style="display:none;margin-top:14px;padding:14px 16px;background:var(--paper);border:1px solid var(--line);border-radius:8px;font-size:.85rem;white-space:pre-wrap;line-height:1.7;"></div>
+  </div>
+
   <div class="stats" id="stats"></div>
 
   <div class="panel" id="add-panel">
@@ -380,6 +388,9 @@
         `無料プランは本を${10}冊まで記録できます（現在${booksCache.length}冊）`;
     }
     paidBar.style.display = isPaid ? "" : "none";
+
+    const recommendBtn = document.getElementById("recommend-btn");
+    recommendBtn.textContent = isPaid ? "AIにおすすめしてもらう" : "🔒 AIにおすすめしてもらう（有料プラン限定）";
   }
 
   async function goToStripe(endpoint, btn, busyText, idleText){
@@ -414,6 +425,37 @@
   document.getElementById("fix-payment-btn").addEventListener("click", ()=>{
     const btn = document.getElementById("fix-payment-btn");
     goToStripe("/api/billing-portal", btn, "準備中…", "カードを確認する");
+  });
+
+  document.getElementById("recommend-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("recommend-btn");
+    const errorEl = document.getElementById("recommend-error");
+    const resultEl = document.getElementById("recommend-result");
+    errorEl.textContent = "";
+    resultEl.style.display = "none";
+
+    if(!currentUser || currentUser.plan !== "paid"){
+      errorEl.textContent = "この機能は有料プランでご利用いただけます。";
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "考え中…";
+    try{
+      const res = await fetch("/api/recommend", { method: "POST" });
+      const data = await res.json();
+      if(!data.ok){
+        errorEl.textContent = data.error || "おすすめを取得できませんでした";
+        return;
+      }
+      resultEl.textContent = data.text;
+      resultEl.style.display = "";
+    }catch(e){
+      errorEl.textContent = "サーバーに接続できませんでした";
+    }finally{
+      btn.disabled = false;
+      btn.textContent = "AIにおすすめしてもらう";
+    }
   });
 
   async function handleCheckoutRedirect(){

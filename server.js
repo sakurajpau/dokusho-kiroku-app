@@ -10,6 +10,8 @@ const PORT = process.env.PORT || 3100;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data.db");
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "sakurajpau";
 const FREE_BOOK_LIMIT = 10;
+const RECOMMEND_MONTHLY_LIMIT = 20;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || null;
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const db = openDb(DB_PATH);
 
@@ -364,6 +366,66 @@ async function handleBillingPortal(req, res, user){
   }
 }
 
+// ---- AIによるおすすめ（有料プラン限定・月20回まで） ----
+
+function currentMonthKey(){
+  return new Date().toISOString().slice(0, 7); // "2026-08"
+}
+
+async function callClaude(prompt){
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 500,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if(!res.ok){
+    const errBody = await res.text();
+    throw new Error(`Claude APIエラー: ${res.status} ${errBody}`);
+  }
+  const data = await res.json();
+  return data.content[0].text;
+}
+
+async function handleRecommend(req, res, user){
+  if(user.plan !== "paid"){
+    return sendJson(res, 403, { ok: false, error: "この機能は有料プランでご利用いただけます" });
+  }
+  if(!ANTHROPIC_API_KEY){
+    return sendJson(res, 500, { ok: false, error: "AI機能が設定されていません（ANTHROPIC_API_KEYが未設定）" });
+  }
+
+  const row = db.prepare("SELECT recommend_count, recommend_count_month FROM users WHERE id = ?").get(user.id);
+  const month = currentMonthKey();
+  const usedThisMonth = row.recommend_count_month === month ? row.recommend_count : 0;
+  if(usedThisMonth >= RECOMMEND_MONTHLY_LIMIT){
+    return sendJson(res, 429, { ok: false, error: `今月の上限(${RECOMMEND_MONTHLY_LIMIT}回)に達しました。来月またお試しください。` });
+  }
+
+  const books = loadBooks();
+  if(books.length === 0){
+    return sendJson(res, 400, { ok: false, error: "本棚に本がまだありません" });
+  }
+  const shelf = books.map(b => `・${b.title}（${b.author || "著者不明"}／${b.category || "未分類"}／評価${b.rating || 0}）`).join("\n");
+  const prompt = `以下は、ある人の読書記録です。\n${shelf}\n\nこの読書傾向をふまえて、次に読むと良さそうな本を3冊、理由も添えて日本語で提案してください。簡潔にお願いします。`;
+
+  try{
+    const text = await callClaude(prompt);
+    db.prepare("UPDATE users SET recommend_count = ?, recommend_count_month = ? WHERE id = ?")
+      .run(usedThisMonth + 1, month, user.id);
+    sendJson(res, 200, { ok: true, text, usedThisMonth: usedThisMonth + 1, limit: RECOMMEND_MONTHLY_LIMIT });
+  }catch(e){
+    sendJson(res, 500, { ok: false, error: e.message });
+  }
+}
+
 function requireLogin(req, res){
   const user = getSessionUser(req);
   if (!user) {
@@ -411,6 +473,11 @@ const server = http.createServer((req, res) => {
     const user = requireLogin(req, res);
     if (!user) return;
     return handleBillingPortal(req, res, user);
+  }
+  if (req.url === "/api/recommend" && req.method === "POST") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleRecommend(req, res, user);
   }
   return serveStatic(req, res);
 });
