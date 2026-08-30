@@ -492,6 +492,16 @@ function handleGetAuditLog(req, res, user){
   sendJson(res, 200, { ok: true, logs: rows });
 }
 
+function handleGetCustomers(req, res, user){
+  if(user.role !== "admin"){
+    return sendJson(res, 403, { ok: false, error: "利用者一覧は管理者(admin)だけが見られます" });
+  }
+  const rows = db.prepare(
+    "SELECT username, role, plan, payment_failed_at, created_at FROM users ORDER BY id"
+  ).all();
+  sendJson(res, 200, { ok: true, customers: rows });
+}
+
 function requireLogin(req, res){
   const user = getSessionUser(req);
   if (!user) {
@@ -549,6 +559,11 @@ const server = http.createServer((req, res) => {
     const user = requireLogin(req, res);
     if (!user) return;
     return handleGetAuditLog(req, res, user);
+  }
+  if (req.url === "/api/customers" && req.method === "GET") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleGetCustomers(req, res, user);
   }
   return serveStatic(req, res);
 });
