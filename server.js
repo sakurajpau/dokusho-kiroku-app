@@ -13,7 +13,41 @@ const FREE_BOOK_LIMIT = 10;
 const RECOMMEND_MONTHLY_LIMIT = 20;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || null;
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const LOGIN_MAX_ATTEMPTS = 3;
+const LOGIN_LOCK_MS = 15 * 60 * 1000; // 15分
 const db = openDb(DB_PATH);
+
+function logAudit(username, action, detail){
+  db.prepare("INSERT INTO audit_log (username, action, detail, created_at) VALUES (?, ?, ?, ?)")
+    .run(username || null, action, detail || null, new Date().toISOString());
+}
+
+// ---- ログイン総当たり対策(レート制限) ----
+// サーバーを再起動するとリセットされる、メモリ上だけの簡易な仕組み。
+const loginAttempts = new Map(); // username -> { count, lockedUntil }
+
+function checkLoginLock(username){
+  const entry = loginAttempts.get(username);
+  if(!entry) return null;
+  if(entry.lockedUntil && entry.lockedUntil > Date.now()){
+    return Math.ceil((entry.lockedUntil - Date.now()) / 60000);
+  }
+  return null;
+}
+
+function recordLoginFailure(username){
+  const entry = loginAttempts.get(username) || { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if(entry.count >= LOGIN_MAX_ATTEMPTS){
+    entry.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+    entry.count = 0;
+  }
+  loginAttempts.set(username, entry);
+}
+
+function clearLoginFailures(username){
+  loginAttempts.delete(username);
+}
 
 // 初回起動時、data.dbが空ならbooks.jsonから取り込む（ephemeralなホスティングでの自動復元用）
 const bookCount = db.prepare("SELECT COUNT(*) AS n FROM books").get().n;
@@ -186,6 +220,7 @@ async function handleSignup(req, res){
     "Content-Type": "application/json; charset=utf-8",
     "Set-Cookie": `session=${token}; HttpOnly; Path=/; SameSite=Lax`,
   });
+  logAudit(username, "signup", `role=${role}`);
   res.end(JSON.stringify({ ok: true, username, role, plan: "free" }));
 }
 
@@ -194,10 +229,21 @@ async function handleLogin(req, res){
   try { body = await readJsonBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: "リクエストの形式が正しくありません" }); }
   const username = (body.username || "").trim();
   const password = body.password || "";
+
+  const lockedMinutes = checkLoginLock(username);
+  if(lockedMinutes !== null){
+    logAudit(username, "login_blocked", `失敗が続いたため一時ロック中(残り約${lockedMinutes}分)`);
+    return sendJson(res, 429, { ok: false, error: `ログイン試行が多すぎます。約${lockedMinutes}分後にもう一度お試しください。` });
+  }
+
   const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
   if (!user || !verifyPassword(password, user.password_hash)) {
+    recordLoginFailure(username);
+    logAudit(username, "login_failed");
     return sendJson(res, 401, { ok: false, error: "ユーザー名またはパスワードが違います" });
   }
+  clearLoginFailures(username);
+  logAudit(username, "login_success");
   const token = createSession(user.id);
   res.writeHead(200, {
     "Content-Type": "application/json; charset=utf-8",
@@ -209,6 +255,8 @@ async function handleLogin(req, res){
 function handleLogout(req, res){
   const cookies = parseCookies(req);
   if (cookies.session) {
+    const session = getSessionUser(req);
+    if(session) logAudit(session.username, "logout");
     db.prepare("DELETE FROM sessions WHERE token = ?").run(cookies.session);
   }
   res.writeHead(200, {
@@ -236,9 +284,11 @@ async function handleRequestReset(req, res){
   const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30分
   db.prepare("UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?")
     .run(token, expires, user.id);
-  // 本来はメール送信。今回は開発用にサーバーログへ出力する。
+  // 本来はメール送信。トークンは絶対にレスポンスに含めない(誰でも取得できてしまうため)。
+  // 開発中の動作確認は、サーバーのログに出力したものを見て行う。
   console.log(`[パスワード再発行] ${username} 用のトークン: ${token}`);
-  sendJson(res, 200, { ok: true, devToken: token });
+  logAudit(username, "password_reset_requested");
+  sendJson(res, 200, { ok: true });
 }
 
 async function handleCompleteReset(req, res){
@@ -255,6 +305,7 @@ async function handleCompleteReset(req, res){
 
   db.prepare("UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?")
     .run(hashPassword(newPassword), user.id);
+  logAudit(user.username, "password_reset_completed");
   sendJson(res, 200, { ok: true });
 }
 
@@ -302,6 +353,7 @@ async function handleConfirmCheckout(req, res, user){
     }
     db.prepare("UPDATE users SET plan = 'paid', stripe_customer_id = ? WHERE id = ?")
       .run(session.customer, user.id);
+    logAudit(user.username, "plan_upgraded", "checkout confirm");
     sendJson(res, 200, { ok: true, plan: "paid" });
   }catch(e){
     sendJson(res, 500, { ok: false, error: e.message });
@@ -332,19 +384,25 @@ async function handleStripeWebhook(req, res){
   }
 
   const obj = event.data.object;
+  const byCustomer = db.prepare("SELECT username FROM users WHERE stripe_customer_id = ?").get(obj.customer);
+  const username = byCustomer ? byCustomer.username : null;
+
   if(event.type === "invoice.payment_failed"){
     // 支払い失敗: すぐには止めず、猶予として記録だけする(Stripeが自動で再試行する)
     db.prepare("UPDATE users SET payment_failed_at = ? WHERE stripe_customer_id = ?")
       .run(new Date().toISOString(), obj.customer);
+    logAudit(username, "payment_failed");
   }
   if(event.type === "invoice.payment_succeeded"){
     db.prepare("UPDATE users SET plan = 'paid', payment_failed_at = NULL WHERE stripe_customer_id = ?")
       .run(obj.customer);
+    logAudit(username, "payment_succeeded");
   }
   if(event.type === "customer.subscription.deleted"){
     // 解約完了: 無料プランに戻す
     db.prepare("UPDATE users SET plan = 'free', payment_failed_at = NULL WHERE stripe_customer_id = ?")
       .run(obj.customer);
+    logAudit(username, "subscription_cancelled");
   }
   sendJson(res, 200, { received: true });
 }
@@ -426,6 +484,14 @@ async function handleRecommend(req, res, user){
   }
 }
 
+function handleGetAuditLog(req, res, user){
+  if(user.role !== "admin"){
+    return sendJson(res, 403, { ok: false, error: "監査ログは管理者(admin)だけが見られます" });
+  }
+  const rows = db.prepare("SELECT username, action, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200").all();
+  sendJson(res, 200, { ok: true, logs: rows });
+}
+
 function requireLogin(req, res){
   const user = getSessionUser(req);
   if (!user) {
@@ -478,6 +544,11 @@ const server = http.createServer((req, res) => {
     const user = requireLogin(req, res);
     if (!user) return;
     return handleRecommend(req, res, user);
+  }
+  if (req.url === "/api/audit-log" && req.method === "GET") {
+    const user = requireLogin(req, res);
+    if (!user) return;
+    return handleGetAuditLog(req, res, user);
   }
   return serveStatic(req, res);
 });

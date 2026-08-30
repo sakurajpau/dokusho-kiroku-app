@@ -293,6 +293,13 @@
     <div id="recommend-result" style="display:none;margin-top:14px;padding:14px 16px;background:var(--paper);border:1px solid var(--line);border-radius:8px;font-size:.85rem;white-space:pre-wrap;line-height:1.7;"></div>
   </div>
 
+  <div class="panel" id="audit-panel" style="display:none;">
+    <h2>監査ログ <span style="font-size:.7rem;color:var(--sub);font-weight:600;">管理者のみ</span></h2>
+    <p style="color:var(--sub);font-size:.85rem;margin-bottom:12px;">誰が・いつ・何をしたかの記録（最新200件）。</p>
+    <button class="btn small ghost" id="audit-log-btn">表示する</button>
+    <div id="audit-log-list" style="display:none;margin-top:14px;max-height:260px;overflow-y:auto;font-family:monospace;font-size:.78rem;line-height:1.8;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:12px 14px;"></div>
+  </div>
+
   <div class="stats" id="stats"></div>
 
   <div class="panel" id="add-panel">
@@ -369,7 +376,28 @@
     const isAdmin = currentUser && currentUser.role === "admin";
     document.getElementById("add-panel").style.display = isAdmin ? "" : "none";
     document.getElementById("member-notice").style.display = isAdmin ? "none" : "";
+    document.getElementById("audit-panel").style.display = isAdmin ? "" : "none";
   }
+
+  document.getElementById("audit-log-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("audit-log-btn");
+    const listEl = document.getElementById("audit-log-list");
+    btn.disabled = true;
+    try{
+      const res = await fetch("/api/audit-log");
+      const data = await res.json();
+      if(!data.ok){
+        alert(data.error || "取得できませんでした");
+        return;
+      }
+      listEl.innerHTML = data.logs.map(l =>
+        `${escapeHtml(l.created_at)} ｜ ${escapeHtml(l.username || "(不明)")} ｜ ${escapeHtml(l.action)}${l.detail ? " ｜ " + escapeHtml(l.detail) : ""}`
+      ).join("<br>");
+      listEl.style.display = "";
+    }finally{
+      btn.disabled = false;
+    }
+  });
 
   function applyPlanUi(){
     const banner = document.getElementById("plan-banner");
