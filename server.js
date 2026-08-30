@@ -236,9 +236,10 @@ async function handleRequestReset(req, res){
   const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30分
   db.prepare("UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?")
     .run(token, expires, user.id);
-  // 本来はメール送信。今回は開発用にサーバーログへ出力する。
+  // 本来はメール送信。トークンは絶対にレスポンスに含めない(誰でも取得できてしまうため)。
+  // 開発中の動作確認は、サーバーのログに出力したものを見て行う。
   console.log(`[パスワード再発行] ${username} 用のトークン: ${token}`);
-  sendJson(res, 200, { ok: true, devToken: token });
+  sendJson(res, 200, { ok: true });
 }
 
 async function handleCompleteReset(req, res){
