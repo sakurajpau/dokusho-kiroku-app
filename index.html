@@ -355,6 +355,7 @@
       <option value="rating-desc">評価：高い順</option>
       <option value="rating-asc">評価：低い順</option>
     </select>
+    <button class="btn small ghost" id="random-btn" type="button">ランダムに1冊選ぶ</button>
   </div>
   <div class="shelf-label" id="count">本棚</div>
   <div class="shelf-hint" id="shelf-hint"></div>
@@ -823,6 +824,18 @@
 
   document.getElementById("search").addEventListener("input", render);
   document.getElementById("sort").addEventListener("change", render);
+
+  function pickRandomBook(){
+    if(!booksCache.length) return;
+    const pick = booksCache[Math.floor(Math.random() * booksCache.length)];
+    selectedId = pick.id;
+    render();
+    setTimeout(()=>{
+      const detailWrap = document.getElementById("detail-wrap");
+      if(detailWrap) detailWrap.scrollIntoView({behavior:"smooth", block:"center"});
+    }, 50);
+  }
+  document.getElementById("random-btn").addEventListener("click", pickRandomBook);
 
   function renderStats(){
     const all = booksCache;
