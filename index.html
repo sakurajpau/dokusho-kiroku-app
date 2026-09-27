@@ -201,7 +201,9 @@
     border-radius:6px;cursor:pointer;
   }
   .auth-tabs button.active{background:var(--accent);color:#faf6ec;border-color:var(--accent)}
-  .auth-error{color:#a9432f;font-size:.8rem;margin-top:10px;min-height:1.2em}
+  .auth-error{color:#c0392b;font-size:.8rem;margin-top:10px;min-height:1.2em;line-height:1.6}
+  .error-text{color:#c0392b;font-size:.85rem;margin:10px 0 0;min-height:1.2em;line-height:1.6}
+  .error-text:empty{margin:0;min-height:0}
   .auth-hint{color:var(--sub);font-size:.75rem;margin-top:14px;text-align:center}
   .user-bar{
     display:flex;justify-content:space-between;align-items:center;
@@ -269,6 +271,8 @@
     <h1>読書記録</h1>
     <div class="sub">読んだ本を、棚に並べていく</div>
   </div>
+
+  <div class="error-text" id="notice" role="alert"></div>
 
   <div class="plan-banner" id="plan-banner" style="display:none;">
     <span id="plan-banner-text"></span>
@@ -341,6 +345,7 @@
     </div>
     <button class="btn" id="save-btn">棚に並べる</button>
     <button class="btn ghost" id="cancel-edit-btn" style="display:none;margin-left:8px;">編集をやめる</button>
+    <div class="error-text" id="form-error" role="alert"></div>
   </div>
 
   <div class="member-notice" id="member-notice" style="display:none;">
@@ -355,6 +360,7 @@
       <option value="rating-desc">評価：高い順</option>
       <option value="rating-asc">評価：低い順</option>
     </select>
+    <button class="btn small ghost" id="random-btn" type="button">ランダムに1冊選ぶ</button>
   </div>
   <div class="shelf-label" id="count">本棚</div>
   <div class="shelf-hint" id="shelf-hint"></div>
@@ -373,12 +379,62 @@
   let booksCache = [];
   let currentUser = null;
 
+  // ---- 共通の道具(通信の失敗・想定外の返事・赤字メッセージ) ----
+  // サーバー側の上限と同じ値。入力の段階でやさしく知らせるために使う。
+  const LIMITS = { title: 200, author: 100, memo: 5000, category: 30, usernameMin: 3, usernameMax: 50, passwordMin: 8, passwordMax: 200 };
+  const NETWORK_ERROR = "サーバーに接続できませんでした。少し待ってからもう一度お試しください。";
+  const UNEXPECTED_ERROR = "うまく処理できませんでした。しばらくしてからもう一度お試しください。";
+
+  // 利用者にそのまま見せてよい理由つきのエラーを作る/取り出す
+  function friendlyError(message){
+    const e = new Error(message);
+    e.friendly = true;
+    return e;
+  }
+  function messageOf(e, fallback){
+    return (e && e.friendly && e.message) ? e.message : fallback;
+  }
+  // サーバーの返事がJSONでなくても(メンテナンス画面など)落ちないようにする
+  async function readJsonSafe(res){
+    try{ return await res.json(); }catch(e){ return null; }
+  }
+  // 画面上部の赤字メッセージ(空文字で消える)
+  function showNotice(message){
+    const el = document.getElementById("notice");
+    if(!el) return;
+    el.textContent = message || "";
+    // 画面の下のほうを見ていても、赤字に気づけるようにする
+    if(message && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  // 星の数は0〜5の整数だけを使う(壊れたデータでも表示が崩れないように)
+  function safeRating(value){
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 && n <= 5 ? n : 0;
+  }
+  function backToLogin(message){
+    currentUser = null;
+    document.getElementById("app-content").style.display = "none";
+    document.getElementById("auth-wrap").style.display = "";
+    switchAuthTab("login");
+    if(message) document.getElementById("login-error").textContent = message;
+  }
+  // どこかで想定外のエラーが起きても、画面が固まらず、やさしいメッセージを出す
+  window.addEventListener("unhandledrejection", (ev)=>{
+    ev.preventDefault();
+    console.error(ev.reason);
+    showNotice(UNEXPECTED_ERROR);
+  });
+  window.addEventListener("error", (ev)=>{
+    console.error(ev.error || ev.message);
+    showNotice(UNEXPECTED_ERROR);
+  });
+
   // ---- 認証 ----
   async function fetchMe(){
     try{
       const res = await fetch("/api/me");
-      const data = await res.json();
-      return data.user;
+      const data = await readJsonSafe(res);
+      return (data && data.user) || null;
     }catch(e){
       return null;
     }
@@ -398,9 +454,9 @@
     btn.disabled = true;
     try{
       const res = await fetch("/api/customers");
-      const data = await res.json();
-      if(!data.ok){
-        alert(data.error || "取得できませんでした");
+      const data = await readJsonSafe(res);
+      if(!data || !data.ok || !Array.isArray(data.customers)){
+        showListError(listEl, (data && data.error) || "利用者一覧を取得できませんでした。しばらくしてからもう一度お試しください。");
         return;
       }
       listEl.innerHTML = data.customers.map(c => {
@@ -410,10 +466,18 @@
         return `<div style="padding:6px 0;border-bottom:1px solid var(--line);">${escapeHtml(c.username)}（${roleLabel}） ／ ${planLabel}${warn}</div>`;
       }).join("");
       listEl.style.display = "";
+    }catch(e){
+      showListError(listEl, NETWORK_ERROR);
     }finally{
       btn.disabled = false;
     }
   });
+
+  // 一覧パネルの中に赤字で理由を出す
+  function showListError(listEl, message){
+    listEl.innerHTML = `<span style="color:#c0392b;">${escapeHtml(message)}</span>`;
+    listEl.style.display = "";
+  }
 
   document.getElementById("audit-log-btn").addEventListener("click", async ()=>{
     const btn = document.getElementById("audit-log-btn");
@@ -421,15 +485,17 @@
     btn.disabled = true;
     try{
       const res = await fetch("/api/audit-log");
-      const data = await res.json();
-      if(!data.ok){
-        alert(data.error || "取得できませんでした");
+      const data = await readJsonSafe(res);
+      if(!data || !data.ok || !Array.isArray(data.logs)){
+        showListError(listEl, (data && data.error) || "監査ログを取得できませんでした。しばらくしてからもう一度お試しください。");
         return;
       }
       listEl.innerHTML = data.logs.map(l =>
         `${escapeHtml(l.created_at)} ｜ ${escapeHtml(l.username || "(不明)")} ｜ ${escapeHtml(l.action)}${l.detail ? " ｜ " + escapeHtml(l.detail) : ""}`
       ).join("<br>");
       listEl.style.display = "";
+    }catch(e){
+      showListError(listEl, NETWORK_ERROR);
     }finally{
       btn.disabled = false;
     }
@@ -460,16 +526,17 @@
   async function goToStripe(endpoint, btn, busyText, idleText){
     btn.disabled = true;
     btn.textContent = busyText;
+    showNotice("");
     try{
       const res = await fetch(endpoint, { method: "POST" });
-      const data = await res.json();
-      if(!data.ok){
-        alert(data.error || "ページを開けませんでした");
+      const data = await readJsonSafe(res);
+      if(!data || !data.ok || typeof data.url !== "string"){
+        showNotice((data && data.error) || "ページを開けませんでした。しばらくしてからもう一度お試しください。");
         return;
       }
       window.location.href = data.url;
     }catch(e){
-      alert("サーバーに接続できませんでした");
+      showNotice(NETWORK_ERROR);
     }finally{
       btn.disabled = false;
       btn.textContent = idleText;
@@ -507,15 +574,15 @@
     btn.textContent = "考え中…";
     try{
       const res = await fetch("/api/recommend", { method: "POST" });
-      const data = await res.json();
-      if(!data.ok){
-        errorEl.textContent = data.error || "おすすめを取得できませんでした";
+      const data = await readJsonSafe(res);
+      if(!data || !data.ok || typeof data.text !== "string"){
+        errorEl.textContent = (data && data.error) || "おすすめを取得できませんでした。しばらくしてからもう一度お試しください。";
         return;
       }
       resultEl.textContent = data.text;
       resultEl.style.display = "";
     }catch(e){
-      errorEl.textContent = "サーバーに接続できませんでした";
+      errorEl.textContent = NETWORK_ERROR;
     }finally{
       btn.disabled = false;
       btn.textContent = "AIにおすすめしてもらう";
@@ -526,18 +593,28 @@
     const params = new URLSearchParams(window.location.search);
     const checkout = params.get("checkout");
     if(!checkout) return;
-    if(checkout === "success"){
-      const sessionId = params.get("session_id");
-      const res = await fetch(`/api/checkout/confirm?session_id=${encodeURIComponent(sessionId)}`);
-      const data = await res.json();
-      if(data.ok){
-        alert("お支払いが確認できました。無制限プランになりました🎉");
-        currentUser.plan = "paid";
-      }else{
-        alert(data.error || "お支払いの確認に失敗しました");
+    try{
+      if(checkout === "success"){
+        const sessionId = params.get("session_id");
+        if(!sessionId){
+          showNotice("お支払いの確認に必要な情報が見つかりませんでした。");
+        }else{
+          const res = await fetch(`/api/checkout/confirm?session_id=${encodeURIComponent(sessionId)}`);
+          const data = await readJsonSafe(res);
+          if(data && data.ok){
+            alert("お支払いが確認できました。無制限プランになりました🎉");
+            currentUser.plan = "paid";
+          }else{
+            showNotice((data && data.error) || "お支払いを確認できませんでした。しばらくしてからもう一度お試しください。");
+          }
+        }
       }
+    }catch(e){
+      showNotice(NETWORK_ERROR);
+    }finally{
+      // 確認に失敗しても、本棚の表示は止めない
+      window.history.replaceState({}, "", window.location.pathname);
     }
-    window.history.replaceState({}, "", window.location.pathname);
   }
 
   async function startApp(){
@@ -545,6 +622,7 @@
     document.getElementById("app-content").style.display = "";
     document.getElementById("user-name").textContent = currentUser.username;
     document.getElementById("user-role").textContent = currentUser.role === "admin" ? "管理者" : "一般";
+    showNotice("");
     applyRoleUi();
     await handleCheckoutRedirect();
     await render();
@@ -572,7 +650,10 @@
   async function initAuth(){
     currentUser = await fetchMe();
     if(currentUser){
-      startApp();
+      startApp().catch((e)=>{
+        console.error(e);
+        showNotice(UNEXPECTED_ERROR);
+      });
     }else{
       document.getElementById("app-content").style.display = "none";
       document.getElementById("auth-wrap").style.display = "";
@@ -611,14 +692,18 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
+      if(!data){
+        errorEl.textContent = "サーバーから想定外の返事がありました。少し待ってからもう一度お試しください。";
+        return null;
+      }
       if(!data.ok){
-        errorEl.textContent = data.error || "処理できませんでした";
+        errorEl.textContent = data.error || "処理できませんでした。もう一度お試しください。";
         return null;
       }
       return data;
     }catch(e){
-      errorEl.textContent = "サーバーに接続できませんでした。少し待ってからもう一度お試しください。";
+      errorEl.textContent = NETWORK_ERROR;
       return null;
     }finally{
       btn.disabled = false;
@@ -626,11 +711,30 @@
     }
   }
 
+  // ログイン・登録の入力チェック。問題があれば、やさしい理由(文字)を返す。なければ空文字。
+  function checkAuthInput(username, password, isSignup){
+    if(!username) return "ユーザー名が空のようです。ユーザー名を入れてくださいね。";
+    if(username.length > LIMITS.usernameMax) return `ユーザー名が長すぎるようです(${username.length}文字)。${LIMITS.usernameMax}文字以内にしてくださいね。`;
+    if(/[\u0000-\u001f\u007f]/.test(username)) return "ユーザー名に使えない文字が含まれているようです。";
+    if(!password) return "パスワードが空のようです。パスワードを入れてくださいね。";
+    if(password.length > LIMITS.passwordMax) return `パスワードが長すぎるようです(${password.length}文字)。${LIMITS.passwordMax}文字以内にしてくださいね。`;
+    if(isSignup){
+      if(username.length < LIMITS.usernameMin) return `ユーザー名は${LIMITS.usernameMin}文字以上にしてくださいね。`;
+      if(password.length < LIMITS.passwordMin) return `パスワードは${LIMITS.passwordMin}文字以上にしてくださいね(いまは${password.length}文字です)。`;
+    }
+    return "";
+  }
+
   document.getElementById("login-btn").addEventListener("click", async ()=>{
     const btn = document.getElementById("login-btn");
     const errorEl = document.getElementById("login-error");
     const username = document.getElementById("login-username").value.trim();
     const password = document.getElementById("login-password").value;
+    const problem = checkAuthInput(username, password, false);
+    if(problem){
+      errorEl.textContent = problem;
+      return;
+    }
     const data = await submitAuthForm("/api/login", username, password, btn, errorEl);
     if(!data) return;
     currentUser = { username: data.username, role: data.role, plan: data.plan, payment_failed_at: data.payment_failed_at };
@@ -643,6 +747,11 @@
     const errorEl = document.getElementById("signup-error");
     const username = document.getElementById("signup-username").value.trim();
     const password = document.getElementById("signup-password").value;
+    const problem = checkAuthInput(username, password, true);
+    if(problem){
+      errorEl.textContent = problem;
+      return;
+    }
     const data = await submitAuthForm("/api/signup", username, password, btn, errorEl);
     if(!data) return;
     currentUser = { username: data.username, role: data.role, plan: data.plan, payment_failed_at: data.payment_failed_at };
@@ -652,7 +761,11 @@
   });
 
   document.getElementById("logout-btn").addEventListener("click", async ()=>{
-    await fetch("/api/logout", { method: "POST" });
+    try{
+      await fetch("/api/logout", { method: "POST" });
+    }catch(e){
+      // 通信に失敗しても、この画面ではログアウトした状態に戻す
+    }
     currentUser = null;
     document.getElementById("app-content").style.display = "none";
     document.getElementById("auth-wrap").style.display = "";
@@ -685,6 +798,14 @@
       populateCategorySelect(DEFAULT_CATEGORY);
       return;
     }
+    if(name.length > LIMITS.category || name === ADD_NEW_VALUE){
+      populateCategorySelect(DEFAULT_CATEGORY);
+      document.getElementById("form-error").textContent = name === ADD_NEW_VALUE
+        ? "その名前は棚の名前に使えません。別の名前にしてくださいね。"
+        : `棚の名前が長すぎるようです(${name.length}文字)。${LIMITS.category}文字以内にしてくださいね。`;
+      return;
+    }
+    document.getElementById("form-error").textContent = "";
     if(!extraCategories.includes(name) && !BASE_CATEGORIES.includes(name)){
       extraCategories.push(name);
     }
@@ -693,36 +814,55 @@
 
   const SPINE_COLORS = ["#a9432f","#c98c4a","#7c8a5e","#5b6b73","#8a5a44","#b5763f","#6b4d3a","#9c6b4f","#4f6d5a","#8a6a8f"];
   function spineColor(title){
+    title = String(title || "");
     let hash = 0;
     for(let i=0;i<title.length;i++) hash = title.charCodeAt(i) + ((hash<<5)-hash);
     return SPINE_COLORS[Math.abs(hash) % SPINE_COLORS.length];
   }
 
+  const SESSION_EXPIRED = "ログインの有効期限が切れました。もう一度ログインしてください。";
+
+  // 本の一覧を読み込む。失敗したときは、理由つきのエラー(friendlyError)を投げる。
   async function loadBooks(){
-    const res = await fetch("/api/books");
-    if(res.status === 401){
-      currentUser = null;
-      document.getElementById("app-content").style.display = "none";
-      document.getElementById("auth-wrap").style.display = "";
-      return [];
+    let res;
+    try{
+      res = await fetch("/api/books");
+    }catch(e){
+      throw friendlyError(NETWORK_ERROR);
     }
-    booksCache = await res.json();
+    if(res.status === 401){
+      backToLogin(SESSION_EXPIRED);
+      throw friendlyError(SESSION_EXPIRED);
+    }
+    const data = await readJsonSafe(res);
+    if(!res.ok || !Array.isArray(data)){
+      throw friendlyError((data && data.error) || "本棚を読み込めませんでした。しばらくしてからもう一度お試しください。");
+    }
+    // 壊れた1件(nullや文字だけのデータ)が混ざっていても、ほかの本は表示できるようにする
+    booksCache = data.filter(b => b && typeof b === "object" && !Array.isArray(b));
     return booksCache;
   }
   async function saveBooks(books){
+    let res;
     try{
-      const res = await fetch("/api/books", {
+      res = await fetch("/api/books", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(books),
       });
-      const data = await res.json();
-      if(!data.ok) return { ok: false, error: data.error };
-      booksCache = books;
-      return { ok: true };
     }catch(e){
-      return { ok: false, error: "サーバーに接続できませんでした" };
+      return { ok: false, error: NETWORK_ERROR };
     }
+    if(res.status === 401){
+      backToLogin(SESSION_EXPIRED);
+      return { ok: false, error: SESSION_EXPIRED };
+    }
+    const data = await readJsonSafe(res);
+    if(!data || !data.ok){
+      return { ok: false, error: (data && data.error) || "保存できませんでした。しばらくしてからもう一度お試しください。" };
+    }
+    booksCache = books;
+    return { ok: true };
   }
 
   // ---- 星の入力 ----
@@ -753,49 +893,109 @@
     document.getElementById("cancel-edit-btn").style.display = "none";
   }
 
-  document.getElementById("save-btn").addEventListener("click", async ()=>{
-    const title = document.getElementById("f-title").value.trim();
-    if(!title){
-      alert("タイトルを入れてください");
-      return;
-    }
-    const author = document.getElementById("f-author").value.trim();
-    const date = document.getElementById("f-date").value || new Date().toISOString().slice(0,10);
-    const memo = document.getElementById("f-memo").value.trim();
-    const category = document.getElementById("f-category").value || DEFAULT_CATEGORY;
+  // ---- 入力フォームのチェック ----
+  function readFormValues(){
+    const dateEl = document.getElementById("f-date");
+    return {
+      title: document.getElementById("f-title").value.trim(),
+      author: document.getElementById("f-author").value.trim(),
+      memo: document.getElementById("f-memo").value.trim(),
+      category: document.getElementById("f-category").value || DEFAULT_CATEGORY,
+      dateRaw: dateEl.value,
+      dateBroken: !!(dateEl.validity && dateEl.validity.badInput),
+    };
+  }
 
-    let books = await loadBooks();
-    if(editingId){
-      books = books.map(b => b.id === editingId
-        ? { ...b, title, author, date, memo, category, rating: currentRating }
-        : b);
-    } else {
-      books.push({
-        id: Date.now(),
-        title, author, date, memo, category,
-        rating: currentRating,
-      });
+  // 長さのチェックだけ(入力の途中でも、すぐに知らせられるように分けてある)
+  function lengthProblem(v){
+    if(v.title.length > LIMITS.title) return `タイトルが長すぎるようです(${v.title.length}文字)。${LIMITS.title}文字以内にしてくださいね。`;
+    if(v.author.length > LIMITS.author) return `著者が長すぎるようです(${v.author.length}文字)。${LIMITS.author}文字以内にしてくださいね。`;
+    if(v.memo.length > LIMITS.memo) return `メモ・感想が長すぎるようです(${v.memo.length}文字)。${LIMITS.memo}文字以内にしてくださいね。`;
+    return "";
+  }
+
+  function formProblem(v){
+    if(!v.title) return "タイトルが空のようです。本のタイトルを入れてくださいね。";
+    const tooLong = lengthProblem(v);
+    if(tooLong) return tooLong;
+    if(v.dateBroken) return "読んだ日の入力が正しくないようです。カレンダーから選び直してくださいね。";
+    if(v.dateRaw){
+      const year = Number(v.dateRaw.slice(0, 4));
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(v.dateRaw) || year < 1900 || year > 2100){
+        return "読んだ日は、1900年〜2100年の間の日付にしてくださいね。";
+      }
     }
-    const result = await saveBooks(books);
-    if(!result.ok){
-      alert(result.error || "保存できませんでした");
-      return;
-    }
-    resetForm();
-    render();
+    return "";
+  }
+
+  ["f-title", "f-author", "f-memo"].forEach(id => {
+    document.getElementById(id).addEventListener("input", ()=>{
+      // 入力の途中で長すぎたら赤字で知らせ、直したら消す
+      document.getElementById("form-error").textContent = lengthProblem(readFormValues());
+    });
   });
 
-  document.getElementById("cancel-edit-btn").addEventListener("click", resetForm);
+  let saving = false;
+  document.getElementById("save-btn").addEventListener("click", async ()=>{
+    if(saving) return; // 連打で二重に登録されないようにする
+    const btn = document.getElementById("save-btn");
+    const formError = document.getElementById("form-error");
+    formError.textContent = "";
+
+    const values = readFormValues();
+    const problem = formProblem(values);
+    if(problem){
+      formError.textContent = problem;
+      return;
+    }
+    const { title, author, memo, category } = values;
+    const date = values.dateRaw || new Date().toISOString().slice(0,10);
+
+    saving = true;
+    btn.disabled = true;
+    try{
+      let books = [...await loadBooks()]; // 元の一覧は、保存が成功するまで変えない
+      if(editingId){
+        books = books.map(b => b.id === editingId
+          ? { ...b, title, author, date, memo, category, rating: currentRating }
+          : b);
+      } else {
+        books.push({
+          id: Date.now(),
+          title, author, date, memo, category,
+          rating: currentRating,
+        });
+      }
+      const result = await saveBooks(books);
+      if(!result.ok){
+        formError.textContent = result.error || "保存できませんでした。しばらくしてからもう一度お試しください。";
+        return;
+      }
+      resetForm();
+      await render();
+    }catch(e){
+      formError.textContent = messageOf(e, UNEXPECTED_ERROR);
+    }finally{
+      saving = false;
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("cancel-edit-btn").addEventListener("click", ()=>{
+    document.getElementById("form-error").textContent = "";
+    resetForm();
+  });
 
   function startEdit(id){
     const book = booksCache.find(b => b.id === id);
     if(!book) return;
-    document.getElementById("f-title").value = book.title;
-    document.getElementById("f-author").value = book.author;
-    document.getElementById("f-date").value = book.date;
-    document.getElementById("f-memo").value = book.memo;
+    document.getElementById("form-error").textContent = "";
+    document.getElementById("f-title").value = book.title || "";
+    document.getElementById("f-author").value = book.author || "";
+    document.getElementById("f-date").value = book.date || "";
+    document.getElementById("f-memo").value = book.memo || "";
     populateCategorySelect(book.category || DEFAULT_CATEGORY);
-    currentRating = book.rating;
+    currentRating = safeRating(book.rating);
     renderStars();
     editingId = id;
     document.getElementById("save-btn").textContent = "更新する";
@@ -805,7 +1005,13 @@
 
   async function deleteBook(id){
     if(!confirm("この記録を削除しますか？")) return;
-    await saveBooks(booksCache.filter(b => b.id !== id));
+    showNotice("");
+    const result = await saveBooks(booksCache.filter(b => b.id !== id));
+    if(!result.ok){
+      showNotice(result.error || "削除できませんでした。しばらくしてからもう一度お試しください。");
+      window.scrollTo({top:0, behavior:"smooth"});
+      return;
+    }
     if(editingId === id) resetForm();
     if(selectedId === id) selectedId = null;
     render();
@@ -824,11 +1030,23 @@
   document.getElementById("search").addEventListener("input", render);
   document.getElementById("sort").addEventListener("change", render);
 
+  function pickRandomBook(){
+    if(!booksCache.length) return;
+    const pick = booksCache[Math.floor(Math.random() * booksCache.length)];
+    selectedId = pick.id;
+    render();
+    setTimeout(()=>{
+      const detailWrap = document.getElementById("detail-wrap");
+      if(detailWrap) detailWrap.scrollIntoView({behavior:"smooth", block:"center"});
+    }, 50);
+  }
+  document.getElementById("random-btn").addEventListener("click", pickRandomBook);
+
   function renderStats(){
     const all = booksCache;
     const statsEl = document.getElementById("stats");
     const total = all.length;
-    const avg = total ? (all.reduce((s,b)=>s+b.rating,0) / total).toFixed(1) : "0.0";
+    const avg = total ? (all.reduce((s,b)=>s+safeRating(b.rating),0) / total).toFixed(1) : "0.0";
     const now = new Date();
     const thisMonth = all.filter(b=>{
       const d = new Date(b.date);
@@ -841,24 +1059,42 @@
     `;
   }
 
+  // 本棚を描く。読み込みや表示に失敗しても、画面が固まらず、赤字で理由を出す。
+  let shelfErrorShown = false;
   async function render(){
+    try{
+      await renderShelf();
+      if(shelfErrorShown){ // 前回の表示失敗で出した赤字だけを、成功したら消す
+        showNotice("");
+        shelfErrorShown = false;
+      }
+    }catch(e){
+      console.error(e);
+      if(currentUser){
+        showNotice(messageOf(e, "本棚をうまく表示できませんでした。ページを読み込み直してみてください。"));
+        shelfErrorShown = true;
+      }
+    }
+  }
+
+  async function renderShelf(){
     const keyword = document.getElementById("search").value.trim().toLowerCase();
     const sortMode = document.getElementById("sort").value;
 
-    let books = await loadBooks();
+    let books = [...await loadBooks()]; // 並べ替えで元の一覧が変わらないようにコピーする
 
     if(keyword){
       books = books.filter(b =>
-        (b.title || "").toLowerCase().includes(keyword) ||
-        (b.author || "").toLowerCase().includes(keyword)
+        String(b.title || "").toLowerCase().includes(keyword) ||
+        String(b.author || "").toLowerCase().includes(keyword)
       );
     }
 
     books.sort((a,b)=>{
-      if(sortMode === "date-desc") return (b.date || "").localeCompare(a.date || "");
-      if(sortMode === "date-asc") return (a.date || "").localeCompare(b.date || "");
-      if(sortMode === "rating-desc") return b.rating - a.rating;
-      if(sortMode === "rating-asc") return a.rating - b.rating;
+      if(sortMode === "date-desc") return String(b.date || "").localeCompare(String(a.date || ""));
+      if(sortMode === "date-asc") return String(a.date || "").localeCompare(String(b.date || ""));
+      if(sortMode === "rating-desc") return safeRating(b.rating) - safeRating(a.rating);
+      if(sortMode === "rating-asc") return safeRating(a.rating) - safeRating(b.rating);
       return 0;
     });
 
@@ -894,17 +1130,18 @@
     shelvesEl.innerHTML = allCategories().map(cat => {
       const catBooks = books.filter(b => (b.category || DEFAULT_CATEGORY) === cat);
       const spines = catBooks.map(b => {
-        const height = 106 + (b.rating || 0) * 9 + (b.title.length % 5) * 3;
-        const width = 30 + Math.min(12, Math.floor(b.title.length / 5));
+        const title = String(b.title || "(タイトルなし)");
+        const height = 106 + safeRating(b.rating) * 9 + (title.length % 5) * 3;
+        const width = 30 + Math.min(12, Math.floor(title.length / 5));
         const selected = b.id === selectedId ? " selected" : "";
         return `
-          <div class="spine${selected}" style="background:${spineColor(b.title)};height:${height}px;width:${width}px" onclick="selectSpine(${b.id})" title="${escapeHtml(b.title)}">
-            <span class="spine-text">${escapeHtml(b.title)}</span>
+          <div class="spine${selected}" style="background:${spineColor(title)};height:${height}px;width:${width}px" onclick="selectSpine(${Number(b.id) || 0})" title="${escapeHtml(title)}">
+            <span class="spine-text">${escapeHtml(title)}</span>
           </div>
         `;
       }).join("");
       return `
-        <div class="shelf-label">${cat}（${catBooks.length}件）</div>
+        <div class="shelf-label">${escapeHtml(cat)}（${catBooks.length}件）</div>
         <div class="bookshelf-outer">
           <div class="bookshelf-row">${spines}</div>
           <div class="plank"></div>
@@ -922,19 +1159,21 @@
       detailWrap.innerHTML = "";
       return;
     }
+    const rating = safeRating(b.rating);
+    const bookId = Number(b.id) || 0;
     detailWrap.innerHTML = `
       <div class="book fade-in">
         <div class="top-row">
-          <h3>${escapeHtml(b.title)}</h3>
-          <div class="stars">${"★".repeat(b.rating)}${"☆".repeat(5 - b.rating)}</div>
+          <h3>${escapeHtml(b.title || "(タイトルなし)")}</h3>
+          <div class="stars">${"★".repeat(rating)}${"☆".repeat(5 - rating)}</div>
         </div>
         <div class="author">${escapeHtml(b.author || "著者不明")}</div>
-        <div class="date">${b.date || ""}</div>
+        <div class="date">${escapeHtml(b.date || "")}</div>
         ${b.memo ? `<div class="memo">${escapeHtml(b.memo)}</div>` : ""}
         <div class="actions">
           ${currentUser && currentUser.role === "admin" ? `
-            <button class="btn small ghost" onclick="startEdit(${b.id})">編集</button>
-            <button class="btn small danger" onclick="deleteBook(${b.id})">削除</button>
+            <button class="btn small ghost" onclick="startEdit(${bookId})">編集</button>
+            <button class="btn small danger" onclick="deleteBook(${bookId})">削除</button>
           ` : ""}
           <button class="btn small ghost" onclick="closeDetail()">閉じる</button>
         </div>
@@ -943,7 +1182,7 @@
   }
 
   function escapeHtml(s){
-    return String(s)
+    return String(s == null ? "" : s)
       .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
       .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
